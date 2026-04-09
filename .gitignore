@@ -1,0 +1,39 @@
+# Secrets and local env
+.env
+.env.*
+!.env.example
+
+# OS / editor
+.DS_Store
+.idea/
+.vscode/
+
+# Python cache
+__pycache__/
+*.pyc
+*.pyo
+
+# Runtime state and generated assets
+data/
+input/
+output/
+temp/
+
+# Logs and archives
+*.log
+*.sqlite
+*.sqlite-journal
+*.sqlite-shm
+*.sqlite-wal
+*.zip
+*.tar
+*.gz
+*.7z
+
+# Media artifacts
+*.mp4
+*.mov
+*.mkv
+*.wav
+*.mp3
+*.ass

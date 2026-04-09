@@ -1,0 +1,53 @@
+services:
+  n8n:
+    build:
+      context: .
+      dockerfile: Dockerfile.n8n
+    container_name: n8n_local
+    restart: unless-stopped
+    ports:
+      - "5678:5678"
+    environment:
+      - N8N_HOST=0.0.0.0
+      - N8N_PORT=5678
+      - N8N_PROTOCOL=http
+      - N8N_EDITOR_BASE_URL=http://localhost:5678
+      - WEBHOOK_URL=http://localhost:5678
+      - NODE_ENV=production
+      - GENERIC_TIMEZONE=Europe/Moscow
+      - TZ=Europe/Moscow
+      - N8N_SECURE_COOKIE=false
+      - N8N_ENABLE_EXECUTE_COMMAND=true
+      - NODE_FUNCTION_ALLOW_BUILTIN=child_process,fs,path
+      - N8N_BLOCK_ENV_ACCESS_IN_NODE=false
+      - N8N_ENFORCE_SETTINGS_FILE_PERMISSIONS=false
+      - EXECUTIONS_TIMEOUT=-1
+      - N8N_RUNNERS_TASK_TIMEOUT=604800
+      - N8N_RUNNERS_TASK_REQUEST_TIMEOUT=604800
+      - N8N_RUNNERS_MAX_CONCURRENCY=1
+      - N8N_RUNNERS_HEARTBEAT_INTERVAL=180
+      - OPENAI_API_KEY=${OPENAI_API_KEY}
+      - NVIDIA_VISIBLE_DEVICES=all
+      - NVIDIA_DRIVER_CAPABILITIES=compute,utility,video
+    volumes:
+      - ./data:/home/node/.n8n
+      - ./input:/work/input
+      - ./output:/work/output
+      - ./banners:/work/banners
+      - ./temp:/work/temp
+    gpus: all
+  dashboard:
+    build:
+      context: .
+      dockerfile: dashboard/Dockerfile
+    container_name: auto_shorts_dashboard
+    restart: unless-stopped
+    ports:
+      - "8787:8787"
+    volumes:
+      - ./dashboard:/app
+      - ./data:/work/data
+      - ./output:/work/output
+      - ./banners:/work/banners
+      - ./temp:/work/temp
+      - /var/run/docker.sock:/var/run/docker.sock

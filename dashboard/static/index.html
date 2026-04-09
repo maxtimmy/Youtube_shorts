@@ -1,0 +1,135 @@
+<!doctype html>
+<html lang="ru">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Auto Shorts Control Center</title>
+    <link rel="stylesheet" href="/app.css" />
+  </head>
+  <body>
+    <div class="page-shell">
+      <header class="hero">
+        <div>
+          <p class="eyebrow">Auto Shorts</p>
+          <h1>Control Center</h1>
+          <p class="hero-copy">
+            Сериалы, эпизоды, очередь шортсов, аккаунты YouTube, блокировки и календарь публикаций
+            в одном интерфейсе.
+          </p>
+        </div>
+        <div class="hero-actions">
+          <button id="refreshButton" class="primary-button">Обновить</button>
+          <div class="timestamp-card">
+            <span>Последнее обновление</span>
+            <strong id="lastUpdated">...</strong>
+          </div>
+        </div>
+      </header>
+
+      <section class="summary-grid" id="summaryGrid"></section>
+
+      <nav class="tab-bar">
+        <button id="tabOverview" class="tab-button active" data-tab="overview">Обзор</button>
+        <button id="tabWorkflows" class="tab-button" data-tab="workflows">n8n Monitor</button>
+      </nav>
+
+      <section id="tabOverviewPanel" class="tab-panel active">
+        <section class="layout-grid">
+          <div class="panel panel-wide">
+            <div class="panel-head">
+              <div>
+                <p class="panel-kicker">Media Library</p>
+                <h2>Сериалы и эпизоды</h2>
+              </div>
+            </div>
+            <div id="serialsList" class="serials-list"></div>
+          </div>
+
+          <div class="panel">
+            <div class="panel-head">
+              <div>
+                <p class="panel-kicker">Accounts</p>
+                <h2>YouTube аккаунты</h2>
+              </div>
+            </div>
+            <div id="accountsList" class="accounts-list"></div>
+          </div>
+        </section>
+
+        <section class="layout-grid">
+          <div class="panel">
+            <div class="panel-head">
+              <div>
+                <p class="panel-kicker">Cooldowns</p>
+                <h2>Активные блокировки</h2>
+              </div>
+            </div>
+            <div id="cooldownsList" class="stack-list"></div>
+          </div>
+
+          <div class="panel panel-wide">
+            <div class="panel-head">
+              <div>
+                <p class="panel-kicker">Calendar</p>
+                <h2>Последние загрузки и публикации</h2>
+              </div>
+            </div>
+            <div id="uploadsTable" class="uploads-table"></div>
+          </div>
+        </section>
+
+        <section class="layout-grid">
+          <div class="panel panel-wide">
+            <div class="panel-head">
+              <div>
+                <p class="panel-kicker">Details</p>
+                <h2>Детали аккаунта</h2>
+              </div>
+            </div>
+            <div id="accountDetail" class="detail-empty">Выбери аккаунт справа, чтобы увидеть историю и настройки.</div>
+          </div>
+
+          <div class="panel">
+            <div class="panel-head">
+              <div>
+                <p class="panel-kicker">Episodes</p>
+                <h2>Эпизоды сериала</h2>
+              </div>
+            </div>
+            <div id="serialDetail" class="detail-empty">Выбери сериал, чтобы увидеть эпизоды и список шортсов.</div>
+          </div>
+        </section>
+      </section>
+
+      <section id="tabWorkflowsPanel" class="tab-panel">
+        <section class="workflow-grid">
+          <div class="panel">
+            <div class="panel-head">
+              <div>
+                <p class="panel-kicker">Workflow Status</p>
+                <h2>Статусы workflow</h2>
+              </div>
+              <div class="inline-actions">
+                <button id="runRenderButton" class="secondary-button">Запустить Render Queue</button>
+                <button id="runUploadButton" class="secondary-button">Запустить Upload</button>
+              </div>
+            </div>
+            <div id="workflowStatusList" class="stack-list"></div>
+          </div>
+
+          <div class="panel panel-wide">
+            <div class="panel-head">
+              <div>
+                <p class="panel-kicker">Latest Errors</p>
+                <h2>Последние ошибки n8n</h2>
+              </div>
+            </div>
+            <div id="workflowErrorsList" class="stack-list"></div>
+          </div>
+        </section>
+      </section>
+    </div>
+
+    <script src="/app.js"></script>
+  </body>
+</html>
