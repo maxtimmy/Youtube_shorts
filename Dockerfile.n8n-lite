@@ -1,0 +1,28 @@
+FROM node:20-bookworm
+
+USER root
+
+RUN apt-get update && apt-get install -y \
+    ffmpeg \
+    python3 \
+    python3-pip \
+    bash \
+    curl \
+    tini \
+    && rm -rf /var/lib/apt/lists/*
+
+RUN npm config set fund false && \
+    npm config set audit false && \
+    npm install -g n8n@2.8.4 --legacy-peer-deps
+
+RUN mkdir -p /home/node/.n8n /work/input /work/output /work/temp && \
+    chown -R node:node /home/node /work
+
+ENV N8N_PORT=5678
+EXPOSE 5678
+
+USER node
+WORKDIR /home/node
+
+ENTRYPOINT ["tini", "--"]
+CMD ["n8n", "start"]
