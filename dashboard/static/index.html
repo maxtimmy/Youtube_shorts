@@ -26,6 +26,11 @@
         </div>
       </header>
 
+      <div id="appStatusBar" class="app-status-bar">
+        <span id="appStatusDot" class="app-status-dot"></span>
+        <span id="appStatusText">Панель готова к работе</span>
+      </div>
+
       <section class="summary-grid" id="summaryGrid"></section>
 
       <nav class="tab-bar">
@@ -34,51 +39,39 @@
       </nav>
 
       <section id="tabOverviewPanel" class="tab-panel active">
-        <section class="layout-grid">
-          <div class="panel panel-wide">
+        <section class="layout-grid layout-grid-media">
+          <div class="panel">
             <div class="panel-head">
               <div>
                 <p class="panel-kicker">Media Library</p>
-                <h2>Сериалы и эпизоды</h2>
+                <h2>Сериалы</h2>
               </div>
             </div>
-            <div id="serialsList" class="serials-list"></div>
+            <div id="serialsList" class="serials-list panel-scroll scroll-md"></div>
           </div>
 
-          <div class="panel">
+          <div class="panel panel-wide">
+            <div class="panel-head">
+              <div>
+                <p class="panel-kicker">Episodes</p>
+                <h2>Эпизоды сериала</h2>
+              </div>
+            </div>
+            <div id="serialDetail" class="detail-empty panel-scroll scroll-xl">Выбери сериал, чтобы увидеть эпизоды и список шортсов.</div>
+          </div>
+        </section>
+
+        <section class="layout-grid layout-grid-accounts">
+          <div class="panel panel-fit-content">
             <div class="panel-head">
               <div>
                 <p class="panel-kicker">Accounts</p>
                 <h2>YouTube аккаунты</h2>
               </div>
             </div>
-            <div id="accountsList" class="accounts-list"></div>
-          </div>
-        </section>
-
-        <section class="layout-grid">
-          <div class="panel">
-            <div class="panel-head">
-              <div>
-                <p class="panel-kicker">Cooldowns</p>
-                <h2>Активные блокировки</h2>
-              </div>
-            </div>
-            <div id="cooldownsList" class="stack-list"></div>
+            <div id="accountsList" class="accounts-list panel-scroll scroll-md"></div>
           </div>
 
-          <div class="panel panel-wide">
-            <div class="panel-head">
-              <div>
-                <p class="panel-kicker">Calendar</p>
-                <h2>Последние загрузки и публикации</h2>
-              </div>
-            </div>
-            <div id="uploadsTable" class="uploads-table"></div>
-          </div>
-        </section>
-
-        <section class="layout-grid">
           <div class="panel panel-wide">
             <div class="panel-head">
               <div>
@@ -86,17 +79,29 @@
                 <h2>Детали аккаунта</h2>
               </div>
             </div>
-            <div id="accountDetail" class="detail-empty">Выбери аккаунт справа, чтобы увидеть историю и настройки.</div>
+            <div id="accountDetail" class="detail-empty panel-scroll scroll-xl">Выбери аккаунт справа, чтобы увидеть историю и настройки.</div>
+          </div>
+        </section>
+
+        <section class="layout-grid layout-grid-activity">
+          <div class="panel panel-wide">
+            <div class="panel-head">
+              <div>
+                <p class="panel-kicker">Calendar</p>
+                <h2>Последние загрузки и публикации</h2>
+              </div>
+            </div>
+            <div id="uploadsTable" class="uploads-table panel-scroll scroll-md"></div>
           </div>
 
           <div class="panel">
             <div class="panel-head">
               <div>
-                <p class="panel-kicker">Episodes</p>
-                <h2>Эпизоды сериала</h2>
+                <p class="panel-kicker">Cooldowns</p>
+                <h2>Активные блокировки</h2>
               </div>
             </div>
-            <div id="serialDetail" class="detail-empty">Выбери сериал, чтобы увидеть эпизоды и список шортсов.</div>
+            <div id="cooldownsList" class="stack-list panel-scroll scroll-sm"></div>
           </div>
         </section>
       </section>
@@ -104,17 +109,13 @@
       <section id="tabWorkflowsPanel" class="tab-panel">
         <section class="workflow-grid">
           <div class="panel">
-            <div class="panel-head">
-              <div>
-                <p class="panel-kicker">Workflow Status</p>
-                <h2>Статусы workflow</h2>
-              </div>
-              <div class="inline-actions">
-                <button id="runRenderButton" class="secondary-button">Запустить Render Queue</button>
-                <button id="runUploadButton" class="secondary-button">Запустить Upload</button>
-              </div>
+          <div class="panel-head">
+            <div>
+              <p class="panel-kicker">Workflow Status</p>
+              <h2>Статусы workflow</h2>
             </div>
-            <div id="workflowStatusList" class="stack-list"></div>
+            </div>
+            <div id="workflowStatusList" class="stack-list panel-scroll scroll-lg"></div>
           </div>
 
           <div class="panel panel-wide">
@@ -124,11 +125,120 @@
                 <h2>Последние ошибки n8n</h2>
               </div>
             </div>
-            <div id="workflowErrorsList" class="stack-list"></div>
+            <div class="bulk-actions">
+              <button id="selectAllErrorsButton" class="mini-button">Выделить все ошибки</button>
+              <button id="deleteSelectedErrorsButton" class="mini-button">Удалить</button>
+            </div>
+            <div id="workflowErrorsList" class="stack-list panel-scroll scroll-lg"></div>
           </div>
         </section>
       </section>
     </div>
+
+    <div id="cooldownModal" class="modal-shell hidden" aria-hidden="true">
+      <div class="modal-backdrop" data-close-modal="true"></div>
+      <div class="modal-card">
+        <div class="modal-head">
+          <div>
+            <p class="panel-kicker">Manual Timeout</p>
+            <h2>Выдать блокировку</h2>
+          </div>
+          <button id="closeCooldownModalButton" class="icon-button" type="button">✕</button>
+        </div>
+        <div class="modal-body">
+          <div class="subtle" id="cooldownModalAccountLabel">Аккаунт</div>
+          <label class="field-label" for="cooldownReasonInput">Причина</label>
+          <textarea id="cooldownReasonInput" class="modal-textarea" placeholder="Например: ручная пауза публикаций, лимит канала, тестовая остановка"></textarea>
+          <label class="field-label" for="cooldownUntilInput">Заблокировать до</label>
+          <input id="cooldownUntilInput" type="datetime-local" />
+          <div class="modal-hint">Время указывается по локальному времени браузера. Блокировка автоматически станет активной сразу после сохранения.</div>
+        </div>
+        <div class="modal-actions">
+          <button id="saveCooldownButton" class="primary-button" type="button">Сохранить блокировку</button>
+          <button id="cancelCooldownButton" class="secondary-button" type="button">Отмена</button>
+        </div>
+      </div>
+    </div>
+
+    <div id="serialModal" class="modal-shell hidden" aria-hidden="true">
+      <div class="modal-backdrop" data-close-serial-modal="true"></div>
+      <div class="modal-card">
+        <div class="modal-head">
+          <div>
+            <p class="panel-kicker">New Serial</p>
+            <h2>Создать сериал</h2>
+          </div>
+          <button id="closeSerialModalButton" class="icon-button" type="button">✕</button>
+        </div>
+        <div class="modal-body">
+          <label class="field-label" for="serialNameInput">Название сериала</label>
+          <input id="serialNameInput" type="text" placeholder="Например: Sheker" />
+          <div class="modal-hint">Будет создана папка в `input`, а сериал сразу появится в списке слева.</div>
+        </div>
+        <div class="modal-actions">
+          <button id="saveSerialButton" class="primary-button" type="button">Создать сериал</button>
+          <button id="cancelSerialButton" class="secondary-button" type="button">Отмена</button>
+        </div>
+      </div>
+    </div>
+
+    <div id="accountModal" class="modal-shell hidden" aria-hidden="true">
+      <div class="modal-backdrop" data-close-account-modal="true"></div>
+      <div class="modal-card">
+        <div class="modal-head">
+          <div>
+            <p class="panel-kicker">New Account</p>
+            <h2>Добавить YouTube аккаунт</h2>
+          </div>
+          <button id="closeAccountModalButton" class="icon-button" type="button">✕</button>
+        </div>
+        <div class="modal-body">
+          <label class="field-label" for="accountNameInput">Название аккаунта</label>
+          <input id="accountNameInput" type="text" placeholder="Например: edik" />
+          <label class="field-label" for="accountCredentialSelect">YouTube credential</label>
+          <select id="accountCredentialSelect"></select>
+          <label class="field-label" for="accountSerialSelect">Активный сериал</label>
+          <select id="accountSerialSelect"></select>
+          <div class="modal-hint">После создания аккаунт сразу попадёт в publishing DB и в `Auto Shorts - YouTube Upload`. Стартовые слоты будут: 08:50, 11:50, 13:50, 15:50, 18:50.</div>
+        </div>
+        <div class="modal-actions">
+          <button id="saveAccountButton" class="primary-button" type="button">Добавить аккаунт</button>
+          <button id="cancelAccountButton" class="secondary-button" type="button">Отмена</button>
+        </div>
+      </div>
+    </div>
+
+    <div id="episodeUploadModal" class="modal-shell hidden" aria-hidden="true">
+      <div class="modal-backdrop" data-close-upload-modal="true"></div>
+      <div class="modal-card">
+        <div class="modal-head">
+          <div>
+            <p class="panel-kicker">New Episode</p>
+            <h2>Загрузить серию</h2>
+          </div>
+          <button id="closeEpisodeUploadModalButton" class="icon-button" type="button">✕</button>
+        </div>
+        <div class="modal-body">
+          <div class="subtle" id="episodeUploadSerialLabel">Сериал</div>
+          <label class="field-label" for="episodeNameInput">Имя файла серии</label>
+          <input id="episodeNameInput" type="text" placeholder="Sheker9" />
+          <div class="modal-hint">Если не менять имя, подставится название сериала и следующий номер серии.</div>
+          <input id="episodeFileInput" type="file" accept=".mp4,video/mp4" hidden />
+          <button id="browseEpisodeFileButton" class="secondary-button" type="button">Выбрать mp4</button>
+          <div id="episodeDropzone" class="upload-dropzone" tabindex="0">
+            <strong>Перетащи сюда mp4</strong>
+            <div class="subtle">или нажми кнопку выше, чтобы открыть проводник</div>
+            <div id="episodeSelectedFile" class="upload-selected subtle">Файл пока не выбран</div>
+          </div>
+        </div>
+        <div class="modal-actions">
+          <button id="uploadEpisodeButton" class="primary-button" type="button">Загрузить серию</button>
+          <button id="cancelEpisodeUploadButton" class="secondary-button" type="button">Отмена</button>
+        </div>
+      </div>
+    </div>
+
+    <div id="toastStack" class="toast-stack" aria-live="polite" aria-atomic="true"></div>
 
     <script src="/app.js"></script>
   </body>
