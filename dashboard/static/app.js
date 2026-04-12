@@ -18,6 +18,7 @@ const state = {
   pendingRequests: 0,
   selectedCalendarDate: null,
   youtubeCredentials: [],
+  youtubeAnalytics: null,
 };
 
 async function api(path, options = {}) {
@@ -106,7 +107,16 @@ function setTab(tabName) {
     button.classList.toggle("active", button.dataset.tab === tabName);
   });
   document.getElementById("tabOverviewPanel").classList.toggle("active", tabName === "overview");
+  document.getElementById("tabAnalyticsPanel").classList.toggle("active", tabName === "analytics");
   document.getElementById("tabWorkflowsPanel").classList.toggle("active", tabName === "workflows");
+  if (tabName === "analytics" && !state.youtubeAnalytics) {
+    loadAnalytics().catch((error) => showToast(error.message, "error"));
+  }
+}
+
+function formatCompactNumber(value) {
+  const number = Number(value || 0);
+  return new Intl.NumberFormat("ru-RU", { notation: "compact", maximumFractionDigits: 1 }).format(number);
 }
 
 function renderSummary() {
@@ -256,6 +266,210 @@ function renderUploads() {
 
   root.innerHTML = "";
   root.append(shell);
+}
+
+function renderAnalytics() {
+  const summaryRoot = document.getElementById("analyticsSummaryGrid");
+  const accountsRoot = document.getElementById("analyticsAccountsList");
+  const topRoot = document.getElementById("analyticsTopList");
+  summaryRoot.innerHTML = "";
+  accountsRoot.innerHTML = "";
+  topRoot.innerHTML = "";
+
+  const payload = state.youtubeAnalytics;
+  if (!payload) {
+    topRoot.append(el("div", "detail-empty", "Аналитика пока не загружена."));
+    return;
+  }
+
+  const maxTrackedViews = Math.max(1, ...(payload.accounts || []).map((item) => item.trackedSummary?.views || 0));
+  const maxSubscribers = Math.max(1, ...(payload.accounts || []).map((item) => item.channel?.subscribers || 0));
+  const summaryMetrics = [
+    ["Охват", formatCompactNumber(payload.summary.trackedViews), "просмотры наших шортсов"],
+    ["Реакции", formatCompactNumber(payload.summary.trackedLikes + payload.summary.trackedComments), "лайки и комментарии"],
+    ["Подписчики", formatCompactNumber(payload.summary.channelSubscribers), "по всем каналам"],
+    ["Каналы", payload.summary.accounts, "с живой аналитикой"],
+  ];
+  const hero = el("div", "metric-card analytics-hero-card");
+  const heroMain = el("div", "analytics-hero-main");
+  const heroTitle = el("div");
+  heroTitle.append(el("div", "metric-label", "Общая картина"));
+  heroTitle.append(el("div", "analytics-hero-title", `${formatCompactNumber(payload.summary.trackedViews)} просмотров`));
+  heroTitle.append(el("div", "metric-foot", "Живой срез по опубликованным шортсам на всех подключённых каналах"));
+  heroMain.append(heroTitle);
+  const heroStats = el("div", "analytics-hero-stats");
+  for (const [label, value] of [["Лайки", formatCompactNumber(payload.summary.trackedLikes)], ["Комм.", formatCompactNumber(payload.summary.trackedComments)], ["Подписч.", formatCompactNumber(payload.summary.channelSubscribers)]]) {
+    const stat = el("div", "analytics-hero-stat");
+    stat.append(el("span", "analytics-mini-label", label));
+    stat.append(el("strong", "analytics-mini-value", String(value)));
+    heroStats.append(stat);
+  }
+  heroMain.append(heroStats);
+  hero.append(heroMain);
+  summaryRoot.append(hero);
+
+  const compare = el("div", "metric-card analytics-compare-card");
+  compare.append(el("div", "metric-label", "Сравнение каналов"));
+  const compareList = el("div", "analytics-compare-list");
+  for (const account of payload.accounts || []) {
+    const row = el("div", "analytics-compare-row");
+    row.append(el("strong", "analytics-compare-name", account.channel?.title || account.accountName));
+    const track = el("div", "analytics-channel-track");
+    const fill = el("div", "analytics-channel-fill analytics-channel-fill-views");
+    fill.style.width = `${Math.max(10, Math.round(((account.trackedSummary?.views || 0) / maxTrackedViews) * 100))}%`;
+    track.append(fill);
+    row.append(track);
+    row.append(el("span", "analytics-channel-bar-value", formatCompactNumber(account.trackedSummary?.views || 0)));
+    compareList.append(row);
+  }
+  compare.append(compareList);
+  summaryRoot.append(compare);
+
+  const allTopVideos = [];
+  for (const account of payload.accounts || []) {
+    const card = el("div", "stack-card analytics-account-card");
+    const top = el("div", "analytics-account-top");
+    const titleWrap = el("div");
+    titleWrap.append(el("h3", "", account.channel?.title || account.accountName));
+    titleWrap.append(el("div", "subtle", account.credentialName || account.accountName));
+    const badges = el("div", "row-meta");
+    if (account.activeSerialName) badges.append(el("span", "badge neutral", account.activeSerialName));
+    badges.append(el("span", "badge ok", account.error ? "частично недоступно" : "live data"));
+    top.append(titleWrap);
+    top.append(badges);
+    card.append(top);
+
+    if (account.error) {
+      card.append(el("div", "subtle", account.error));
+    }
+
+    const visual = el("div", "analytics-channel-visual");
+    const score = el("div", "analytics-score-orb");
+    score.append(el("span", "analytics-score-label", "просмотры"));
+    score.append(el("strong", "analytics-score-value", formatCompactNumber(account.trackedSummary?.views || 0)));
+    visual.append(score);
+    const bars = el("div", "analytics-bar-stack");
+    const trackedBar = el("div", "analytics-channel-bar-row");
+    trackedBar.append(el("span", "analytics-channel-bar-label", "Шортсы"));
+    const trackedTrack = el("div", "analytics-channel-track");
+    const trackedFill = el("div", "analytics-channel-fill analytics-channel-fill-views");
+    trackedFill.style.width = `${Math.max(10, Math.round(((account.trackedSummary?.views || 0) / maxTrackedViews) * 100))}%`;
+    trackedTrack.append(trackedFill);
+    trackedBar.append(trackedTrack);
+    trackedBar.append(el("strong", "analytics-channel-bar-value", formatCompactNumber(account.trackedSummary?.views || 0)));
+    bars.append(trackedBar);
+
+    const subscribersBar = el("div", "analytics-channel-bar-row");
+    subscribersBar.append(el("span", "analytics-channel-bar-label", "Подписч."));
+    const subscribersTrack = el("div", "analytics-channel-track");
+    const subscribersFill = el("div", "analytics-channel-fill analytics-channel-fill-subs");
+    subscribersFill.style.width = `${Math.max(10, Math.round(((account.channel?.subscribers || 0) / maxSubscribers) * 100))}%`;
+    subscribersTrack.append(subscribersFill);
+    subscribersBar.append(subscribersTrack);
+    subscribersBar.append(el("strong", "analytics-channel-bar-value", formatCompactNumber(account.channel?.subscribers || 0)));
+    bars.append(subscribersBar);
+
+    const metaRow = el("div", "analytics-chip-row");
+    metaRow.append(el("span", "badge neutral", `${formatCompactNumber(account.channel?.views || 0)} просмотров канала`));
+    metaRow.append(el("span", "badge neutral", `${formatCompactNumber(account.channel?.videos || 0)} видео`));
+    metaRow.append(el("span", "badge neutral", `${formatCompactNumber(account.trackedSummary?.videos || 0)} наших шортсов`));
+    bars.append(metaRow);
+    visual.append(bars);
+    card.append(visual);
+
+    const topTitle = el("div", "analytics-subtitle", "Лучшие шортсы канала");
+    card.append(topTitle);
+    const topVideosList = el("div", "analytics-video-list");
+    const channelTop = [...(account.topVideos || [])].sort((a, b) => (b.views || 0) - (a.views || 0)).slice(0, 3);
+    const channelLeader = channelTop[0]?.views || 1;
+    if (!channelTop.length) {
+      topVideosList.append(el("div", "subtle", "По этому каналу пока нечего показывать."));
+    } else {
+      for (const video of channelTop) {
+        const row = el("div", "analytics-video-row");
+        const left = el("div", "analytics-video-main");
+        left.append(el("strong", "", video.youtube_title || video.short_name));
+        const miniBar = el("div", "analytics-bar analytics-bar-thin");
+        const miniFill = el("div", "analytics-bar-fill");
+        miniFill.style.width = `${Math.max(10, Math.round(((video.views || 0) / channelLeader) * 100))}%`;
+        miniBar.append(miniFill);
+        left.append(miniBar);
+        const right = el("div", "analytics-video-stats");
+        right.append(el("span", "badge neutral", `${formatCompactNumber(video.views)}`));
+        if (video.youtube_url) {
+          const link = document.createElement("a");
+          link.href = video.youtube_url;
+          link.target = "_blank";
+          link.rel = "noreferrer";
+          link.textContent = "Открыть";
+          right.append(link);
+        }
+        row.append(left);
+        row.append(right);
+        topVideosList.append(row);
+      }
+    }
+    card.append(topVideosList);
+    accountsRoot.append(card);
+
+    for (const video of account.topVideos || []) {
+      allTopVideos.push({ ...video, accountName: account.channel?.title || account.accountName });
+    }
+  }
+
+  allTopVideos.sort((a, b) => (b.views || 0) - (a.views || 0));
+  const leaderMax = allTopVideos[0]?.views || 1;
+  if (!allTopVideos.length) {
+    topRoot.append(el("div", "detail-empty", "Пока нет роликов для аналитики."));
+  } else {
+    const spotlight = allTopVideos[0];
+    const heroTop = el("div", "stack-card analytics-top-hero");
+    heroTop.append(el("div", "analytics-subtitle", "Главный лидер"));
+    heroTop.append(el("h3", "", spotlight.youtube_title || spotlight.short_name));
+    heroTop.append(el("div", "subtle", `${spotlight.accountName} • ${spotlight.short_name}`));
+    heroTop.append(el("div", "analytics-top-hero-value", `${formatCompactNumber(spotlight.views)} просмотров`));
+    const spotlightBar = el("div", "analytics-bar");
+    const spotlightFill = el("div", "analytics-bar-fill");
+    spotlightFill.style.width = "100%";
+    spotlightBar.append(spotlightFill);
+    heroTop.append(spotlightBar);
+    if (spotlight.youtube_url) {
+      const link = document.createElement("a");
+      link.href = spotlight.youtube_url;
+      link.target = "_blank";
+      link.rel = "noreferrer";
+      link.textContent = "Открыть ролик";
+      heroTop.append(link);
+    }
+    topRoot.append(heroTop);
+
+    for (const video of allTopVideos.slice(1, 6)) {
+      const card = el("div", "stack-card analytics-top-card compact");
+      const top = el("div", "analytics-top-head");
+      const left = el("div");
+      left.append(el("strong", "", video.short_name));
+      left.append(el("div", "subtle", video.accountName));
+      const right = el("div", "analytics-top-metrics");
+      right.append(el("span", "badge ok", `${formatCompactNumber(video.views)}`));
+      top.append(left);
+      top.append(right);
+      card.append(top);
+      const bar = el("div", "analytics-bar analytics-bar-thin");
+      const fill = el("div", "analytics-bar-fill");
+      fill.style.width = `${Math.max(8, Math.round(((video.views || 0) / leaderMax) * 100))}%`;
+      bar.append(fill);
+      card.append(bar);
+      if (video.youtube_url) {
+        const link = document.createElement("a");
+        link.href = video.youtube_url;
+        link.target = "_blank";
+        link.rel = "noreferrer";
+        link.textContent = "Открыть ролик";
+        card.append(link);
+      }
+      topRoot.append(card);
+    }
+  }
 }
 
 async function saveActiveSerial(accountSlug, serialSlug) {
@@ -1130,11 +1344,30 @@ async function loadWorkflows() {
   renderWorkflowErrors();
 }
 
+async function loadAnalytics() {
+  state.youtubeAnalytics = await api("/api/youtube-analytics");
+  renderAnalytics();
+}
+
 async function loadAll() {
-  const [dashboard, workflows] = await Promise.all([api("/api/dashboard"), api("/api/workflows")]);
-  state.dashboard = dashboard;
-  state.workflows = workflows;
-  setLastUpdated(dashboard.generatedAt);
+  const [dashboardResult, workflowsResult, analyticsResult] = await Promise.allSettled([
+    api("/api/dashboard"),
+    api("/api/workflows"),
+    api("/api/youtube-analytics"),
+  ]);
+  if (dashboardResult.status !== "fulfilled") throw dashboardResult.reason;
+  if (workflowsResult.status !== "fulfilled") throw workflowsResult.reason;
+  state.dashboard = dashboardResult.value;
+  state.workflows = workflowsResult.value;
+  if (analyticsResult.status === "fulfilled") {
+    state.youtubeAnalytics = analyticsResult.value;
+    renderAnalytics();
+  } else {
+    state.youtubeAnalytics = null;
+    renderAnalytics();
+    showToast(`YouTube Analytics временно недоступна: ${analyticsResult.reason.message}`, "warning");
+  }
+  setLastUpdated(state.dashboard.generatedAt);
   renderSummary();
   renderSerials();
   renderAccounts();

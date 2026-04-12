@@ -35,6 +35,7 @@
 
       <nav class="tab-bar">
         <button id="tabOverview" class="tab-button active" data-tab="overview">Обзор</button>
+        <button id="tabAnalytics" class="tab-button" data-tab="analytics">YouTube Analytics</button>
         <button id="tabWorkflows" class="tab-button" data-tab="workflows">n8n Monitor</button>
       </nav>
 
@@ -130,6 +131,40 @@
               <button id="deleteSelectedErrorsButton" class="mini-button">Удалить</button>
             </div>
             <div id="workflowErrorsList" class="stack-list panel-scroll scroll-lg"></div>
+          </div>
+        </section>
+      </section>
+
+      <section id="tabAnalyticsPanel" class="tab-panel">
+        <section class="panel">
+          <div class="panel-head">
+            <div>
+              <p class="panel-kicker">YouTube</p>
+              <h2>Инфографика по каналам и шортсам</h2>
+            </div>
+          </div>
+          <div id="analyticsSummaryGrid" class="summary-grid analytics-summary-grid"></div>
+        </section>
+
+        <section class="analytics-grid">
+          <div class="panel panel-wide">
+            <div class="panel-head">
+              <div>
+                <p class="panel-kicker">Accounts</p>
+                <h2>Каналы и общая динамика</h2>
+              </div>
+            </div>
+            <div id="analyticsAccountsList" class="analytics-accounts-list"></div>
+          </div>
+
+          <div class="panel">
+            <div class="panel-head">
+              <div>
+                <p class="panel-kicker">Top Shorts</p>
+                <h2>Лидеры по просмотрам</h2>
+              </div>
+            </div>
+            <div id="analyticsTopList" class="stack-list panel-scroll scroll-lg"></div>
           </div>
         </section>
       </section>

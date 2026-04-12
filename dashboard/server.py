@@ -3,6 +3,7 @@ import re
 import shutil
 import socket
 import sqlite3
+import urllib.parse
 import urllib.request
 import uuid
 from datetime import datetime, timezone
@@ -952,6 +953,280 @@ def dashboard_payload() -> dict:
     }
 
 
+def docker_exec_capture(container_name: str, command: list[str]) -> dict:
+    status, body = docker_socket_request(
+        "POST",
+        f"/v1.41/containers/{container_name}/exec",
+        {
+            "AttachStdout": True,
+            "AttachStderr": True,
+            "Tty": True,
+            "Cmd": command,
+        },
+    )
+    if status not in (200, 201):
+        raise RuntimeError(f"Docker exec create failed: HTTP {status} {body.decode('utf-8', errors='ignore')}")
+    payload = json.loads(body.decode("utf-8") or "{}")
+    exec_id = payload.get("Id")
+    if not exec_id:
+        raise RuntimeError("Docker exec create did not return Id")
+    status, body = docker_socket_request(
+        "POST",
+        f"/v1.41/exec/{exec_id}/start",
+        {"Detach": False, "Tty": True},
+    )
+    if status not in (200, 204):
+        raise RuntimeError(f"Docker exec start failed: HTTP {status} {body.decode('utf-8', errors='ignore')}")
+    inspect_status, inspect_body = docker_socket_request("GET", f"/v1.41/exec/{exec_id}/json")
+    if inspect_status != 200:
+        raise RuntimeError(f"Docker exec inspect failed: HTTP {inspect_status} {inspect_body.decode('utf-8', errors='ignore')}")
+    inspect = json.loads(inspect_body.decode("utf-8") or "{}")
+    return {
+        "execId": exec_id,
+        "exitCode": inspect.get("ExitCode"),
+        "output": body.decode("utf-8", errors="ignore"),
+    }
+
+
+def export_youtube_credential_decrypted(credential_id: str) -> dict:
+    result = docker_exec_capture(
+        N8N_CONTAINER,
+        ["n8n", "export:credentials", "--id", str(credential_id), "--decrypted"],
+    )
+    if result.get("exitCode") not in (0, None):
+        raise RuntimeError(result.get("output") or "Failed to export credential")
+    try:
+        exported = json.loads(result.get("output") or "[]")
+    except json.JSONDecodeError as exc:
+        raise RuntimeError("Could not parse decrypted credential export") from exc
+    if not exported:
+        raise RuntimeError("Credential export returned no data")
+    return exported[0]
+
+
+def refresh_google_access_token(credential_payload: dict) -> str:
+    data = credential_payload.get("data") or {}
+    oauth = data.get("oauthTokenData") or {}
+    refresh_token = oauth.get("refresh_token")
+    client_id = data.get("clientId")
+    client_secret = data.get("clientSecret")
+    if not refresh_token or not client_id or not client_secret:
+        raise RuntimeError("YouTube credential is missing OAuth refresh data")
+
+    token_body = urllib.parse.urlencode(
+        {
+            "client_id": client_id,
+            "client_secret": client_secret,
+            "refresh_token": refresh_token,
+            "grant_type": "refresh_token",
+        }
+    ).encode("utf-8")
+    request = urllib.request.Request(
+        "https://oauth2.googleapis.com/token",
+        method="POST",
+        headers={"Content-Type": "application/x-www-form-urlencoded"},
+        data=token_body,
+    )
+    with urllib.request.urlopen(request, timeout=30) as response:
+        payload = json.loads(response.read().decode("utf-8") or "{}")
+    access_token = payload.get("access_token")
+    if not access_token:
+        raise RuntimeError("Google OAuth token refresh did not return access_token")
+    return str(access_token)
+
+
+def youtube_api_get(access_token: str, path: str, params: dict) -> dict:
+    query = urllib.parse.urlencode({key: value for key, value in params.items() if value is not None and value != ""})
+    url = f"https://www.googleapis.com/youtube/v3/{path}"
+    if query:
+        url = f"{url}?{query}"
+    request = urllib.request.Request(
+        url,
+        headers={"Authorization": f"Bearer {access_token}"},
+    )
+    with urllib.request.urlopen(request, timeout=30) as response:
+        return json.loads(response.read().decode("utf-8") or "{}")
+
+
+def as_int(value) -> int:
+    try:
+        return int(value)
+    except Exception:
+        return 0
+
+
+def youtube_analytics_payload() -> dict:
+    accounts = fetch_json(
+        """
+        SELECT
+            a.id,
+            a.account_slug,
+            a.account_name,
+            a.youtube_credential_id,
+            a.youtube_credential_name,
+            s.serial_slug AS active_serial_slug,
+            s.serial_name AS active_serial_name
+        FROM youtube_accounts a
+        LEFT JOIN account_active_serials s ON s.account_id = a.id
+        WHERE a.account_slug <> 'default'
+          AND a.is_active = 1
+          AND a.youtube_credential_id IS NOT NULL
+          AND TRIM(COALESCE(a.youtube_credential_id, '')) <> ''
+        ORDER BY a.account_name
+        """
+    )
+
+    account_cards: list[dict] = []
+    totals = {
+        "accounts": 0,
+        "trackedVideos": 0,
+        "trackedViews": 0,
+        "trackedLikes": 0,
+        "trackedComments": 0,
+        "channelViews": 0,
+        "channelSubscribers": 0,
+        "channelVideoCount": 0,
+    }
+
+    for account in accounts:
+        history_rows = fetch_json(
+            """
+            SELECT
+                short_name,
+                serial_slug,
+                episode_base_name,
+                youtube_title,
+                youtube_video_id,
+                youtube_url,
+                uploaded_at,
+                publish_at_local,
+                publish_at_utc,
+                publish_date,
+                publish_time,
+                {published_status_sql} AS status
+            FROM youtube_publication_history h
+            WHERE h.account_id = ?
+              AND h.youtube_video_id IS NOT NULL
+              AND TRIM(COALESCE(h.youtube_video_id, '')) <> ''
+            ORDER BY datetime(COALESCE(h.publish_at_utc, h.uploaded_at)) DESC, h.id DESC
+            LIMIT 200
+            """.format(published_status_sql=PUBLISHED_STATUS_SQL),
+            (account["id"],),
+        )
+
+        account_card = {
+            "accountSlug": account["account_slug"],
+            "accountName": account["account_name"],
+            "activeSerialSlug": account.get("active_serial_slug"),
+            "activeSerialName": account.get("active_serial_name"),
+            "credentialName": account.get("youtube_credential_name"),
+            "channel": None,
+            "trackedSummary": {
+                "videos": len(history_rows),
+                "views": 0,
+                "likes": 0,
+                "comments": 0,
+            },
+            "topVideos": [],
+            "recentVideos": [],
+            "error": None,
+        }
+
+        try:
+            credential = export_youtube_credential_decrypted(str(account["youtube_credential_id"]))
+            access_token = refresh_google_access_token(credential)
+
+            channel_response = youtube_api_get(
+                access_token,
+                "channels",
+                {"part": "snippet,statistics", "mine": "true"},
+            )
+            channel_item = (channel_response.get("items") or [{}])[0]
+            channel_stats = channel_item.get("statistics") or {}
+            channel_snippet = channel_item.get("snippet") or {}
+            account_card["channel"] = {
+                "channelId": channel_item.get("id"),
+                "title": channel_snippet.get("title") or account["account_name"],
+                "thumbnail": ((channel_snippet.get("thumbnails") or {}).get("default") or {}).get("url"),
+                "views": as_int(channel_stats.get("viewCount")),
+                "subscribers": as_int(channel_stats.get("subscriberCount")),
+                "videos": as_int(channel_stats.get("videoCount")),
+            }
+
+            video_map: dict[str, dict] = {}
+            ordered_ids: list[str] = []
+            for row in history_rows:
+                video_id = str(row.get("youtube_video_id") or "").strip()
+                if not video_id:
+                    continue
+                if video_id not in video_map:
+                    video_map[video_id] = dict(row)
+                    ordered_ids.append(video_id)
+
+            stats_by_video: dict[str, dict] = {}
+            for index in range(0, len(ordered_ids), 50):
+                chunk = ordered_ids[index:index + 50]
+                response = youtube_api_get(
+                    access_token,
+                    "videos",
+                    {"part": "statistics,snippet", "id": ",".join(chunk)},
+                )
+                for item in response.get("items") or []:
+                    stats_by_video[item.get("id")] = item
+
+            enriched_videos = []
+            for video_id in ordered_ids:
+                base = video_map[video_id]
+                live = stats_by_video.get(video_id) or {}
+                statistics = live.get("statistics") or {}
+                snippet = live.get("snippet") or {}
+                enriched = {
+                    **base,
+                    "youtube_video_id": video_id,
+                    "youtube_title": base.get("youtube_title") or snippet.get("title") or base.get("short_name"),
+                    "thumbnail": ((snippet.get("thumbnails") or {}).get("medium") or {}).get("url")
+                    or ((snippet.get("thumbnails") or {}).get("default") or {}).get("url"),
+                    "views": as_int(statistics.get("viewCount")),
+                    "likes": as_int(statistics.get("likeCount")),
+                    "comments": as_int(statistics.get("commentCount")),
+                }
+                enriched_videos.append(enriched)
+
+            enriched_videos.sort(key=lambda item: item.get("views", 0), reverse=True)
+            account_card["topVideos"] = enriched_videos[:6]
+            account_card["trackedSummary"] = {
+                "videos": len(enriched_videos),
+                "views": sum(item["views"] for item in enriched_videos),
+                "likes": sum(item["likes"] for item in enriched_videos),
+                "comments": sum(item["comments"] for item in enriched_videos),
+            }
+            recent_videos = sorted(
+                enriched_videos,
+                key=lambda item: item.get("publish_at_utc") or item.get("uploaded_at") or "",
+                reverse=True,
+            )
+            account_card["recentVideos"] = recent_videos[:10]
+
+            totals["accounts"] += 1
+            totals["trackedVideos"] += account_card["trackedSummary"]["videos"]
+            totals["trackedViews"] += account_card["trackedSummary"]["views"]
+            totals["trackedLikes"] += account_card["trackedSummary"]["likes"]
+            totals["trackedComments"] += account_card["trackedSummary"]["comments"]
+            totals["channelViews"] += (account_card["channel"] or {}).get("views", 0)
+            totals["channelSubscribers"] += (account_card["channel"] or {}).get("subscribers", 0)
+            totals["channelVideoCount"] += (account_card["channel"] or {}).get("videos", 0)
+        except Exception as exc:
+            account_card["error"] = str(exc)
+
+        account_cards.append(account_card)
+
+    return {
+        "generatedAt": datetime.utcnow().isoformat() + "Z",
+        "summary": totals,
+        "accounts": account_cards,
+    }
+
+
 def extract_error_details(raw_data: str | None) -> dict:
     text = raw_data or ""
     try:
@@ -1595,6 +1870,11 @@ class DashboardHandler(BaseHTTPRequestHandler):
                 return self._send_json(workflow_payload())
             except Exception as exc:
                 return self._send_json({"error": f"Workflow monitor is temporarily unavailable: {exc}"}, 503)
+        if parsed.path == "/api/youtube-analytics":
+            try:
+                return self._send_json(youtube_analytics_payload())
+            except Exception as exc:
+                return self._send_json({"error": f"YouTube analytics are temporarily unavailable: {exc}"}, 503)
         if parsed.path == "/api/n8n/credentials/youtube":
             return self._send_json({"credentials": list_youtube_credentials()})
         if parsed.path == "/api/workflow-errors":
