@@ -1,8 +1,8 @@
+from __future__ import annotations
+
 import json
-import os
 import re
 import shutil
-import socket
 import sqlite3
 import urllib.parse
 import urllib.request
@@ -13,31 +13,26 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import unquote, urlparse
 
-ROOT = Path("/app")
+from config import settings
+from database import connect, database_status, migrate_all
+from n8n_client import N8NError, client as n8n_client, post_webhook
+
+ROOT = settings.app_root
 STATIC_DIR = ROOT / "static"
-MEDIA_DB = Path("/work/output/media-library.sqlite")
-PUBLISH_DB = Path("/work/output/youtube-publishing.sqlite")
-N8N_DB = Path("/work/n8n-data/database.sqlite")
-INPUT_ROOT = Path("/work/input")
-EVENT_LOG_PATH = Path("/work/n8n-data/n8nEventLog.log")
-HOST = os.getenv("DASHBOARD_HOST", "0.0.0.0")
-PORT = int(os.getenv("DASHBOARD_PORT", "8787"))
-N8N_CONTAINER = os.getenv("N8N_CONTAINER_NAME", "n8n_local")
+MEDIA_DB = settings.media_db
+PUBLISH_DB = settings.publish_db
+INPUT_ROOT = settings.input_root
+EVENT_LOG_PATH = Path("/nonexistent/n8nEventLog.log")
+HOST = settings.host
+PORT = settings.port
 MANAGED_WORKFLOWS = {
     "render": "Auto Shorts - Render Queue",
     "upload": "Auto Shorts - YouTube Upload",
 }
 WORKFLOW_IDS = {
-    "render": os.getenv("N8N_RENDER_WORKFLOW_ID", "168805f3-70c2-48ac-a320-fa599235e0c0"),
-    "upload": os.getenv("N8N_UPLOAD_WORKFLOW_ID", "gsNR0rmVmiG7N2SS"),
+    "render": settings.render_workflow_id,
+    "upload": settings.upload_workflow_id,
 }
-MANUAL_WEBHOOKS = {
-    "render": "manual-render-queue",
-    "upload": "manual-youtube-upload",
-}
-HOST_DB_HELPER = os.getenv("HOST_DB_HELPER_URL", "http://host.docker.internal:8790").rstrip("/")
-N8N_BASE_URL = os.getenv("N8N_BASE_URL", "http://n8n:5678").rstrip("/")
-DOCKER_SOCKET_PATH = "/var/run/docker.sock"
 CONTROL_STATE_PATH = Path("/work/temp/dashboard-control-state.json")
 WORKFLOW_STEP_HINTS = {
     "render": [
@@ -126,32 +121,27 @@ def next_episode_defaults(serial_slug: str, serial_name: str) -> dict:
 
 
 def db_conn(path: Path) -> sqlite3.Connection:
-    if path == N8N_DB:
-        conn = sqlite3.connect(f"file:{path.as_posix()}?mode=ro&immutable=1", uri=True)
-    else:
-        conn = sqlite3.connect(path)
-    conn.row_factory = sqlite3.Row
-    return conn
+    return connect(path)
 
 
-def fetch_json(sql: str, params: tuple = (), *, db: Path = PUBLISH_DB) -> list[dict]:
-    conn = db_conn(db)
+def fetch_json(sql: str, params: tuple = (), *, db: Path | None = None) -> list[dict]:
+    conn = db_conn(db or PUBLISH_DB)
     cur = conn.cursor()
     rows = [dict(row) for row in cur.execute(sql, params).fetchall()]
     conn.close()
     return rows
 
 
-def fetch_one(sql: str, params: tuple = (), *, db: Path = PUBLISH_DB) -> dict | None:
-    conn = db_conn(db)
+def fetch_one(sql: str, params: tuple = (), *, db: Path | None = None) -> dict | None:
+    conn = db_conn(db or PUBLISH_DB)
     cur = conn.cursor()
     row = cur.execute(sql, params).fetchone()
     conn.close()
     return dict(row) if row else None
 
 
-def execute(sql: str, params: tuple = (), *, db: Path = PUBLISH_DB) -> None:
-    conn = db_conn(db)
+def execute(sql: str, params: tuple = (), *, db: Path | None = None) -> None:
+    conn = db_conn(db or PUBLISH_DB)
     cur = conn.cursor()
     cur.execute(sql, params)
     conn.commit()
@@ -454,18 +444,10 @@ def account_rows() -> list[dict]:
 
 
 def list_youtube_credentials() -> list[dict]:
-    rows = fetch_all(
-        """
-        SELECT
-            id,
-            name,
-            type
-        FROM credentials_entity
-        WHERE type = 'youTubeOAuth2Api'
-        ORDER BY name
-        """,
-        db=N8N_DB,
-    )
+    rows = [
+        {"id": str(item["id"]), "name": str(item["name"]), "type": "youTubeOAuth2Api"}
+        for item in settings.youtube_credentials()
+    ]
     assigned_rows = fetch_json(
         """
         SELECT youtube_credential_id, account_slug, account_name
@@ -502,21 +484,17 @@ def upload_workflow_branch_accounts() -> list[dict]:
 
 
 def rebuild_upload_workflow() -> dict:
-    conn = sqlite3.connect(N8N_DB)
-    conn.row_factory = sqlite3.Row
-    cur = conn.cursor()
-    row = cur.execute(
-        "SELECT name, description, nodes, settings, staticData, pinData, versionCounter FROM workflow_entity WHERE id = ?",
-        (WORKFLOW_IDS["upload"],),
-    ).fetchone()
+    workflow_id = WORKFLOW_IDS["upload"]
+    if not workflow_id:
+        raise KeyError("Upload workflow is not configured")
+    row = n8n_client.get_workflow(workflow_id)
     if not row:
-        conn.close()
         raise KeyError("Upload workflow not found")
 
-    nodes = json.loads(row["nodes"])
-    settings = row["settings"]
-    static_data = row["staticData"]
-    pin_data = row["pinData"]
+    nodes = row.get("nodes") or []
+    if isinstance(nodes, str):
+        nodes = json.loads(nodes)
+    workflow_settings = row.get("settings") or {}
 
     def node_by_name(name: str) -> dict:
         for node in nodes:
@@ -640,70 +618,17 @@ def rebuild_upload_workflow() -> dict:
         connections[branch["upload"]] = {"main": [[{"node": branch["merge"], "type": "main", "index": 1}]]}
         connections[branch["merge"]] = {"main": [[{"node": "Record Upload In DB", "type": "main", "index": 0}]]}
 
-    version_id = str(uuid.uuid4())
-    version_counter = int(row["versionCounter"] or 0) + 1
-    nodes_json = json.dumps(rebuilt_nodes, ensure_ascii=False)
-    connections_json = json.dumps(connections, ensure_ascii=False)
-
-    cur.execute(
-        """
-        UPDATE workflow_entity
-        SET nodes = ?,
-            connections = ?,
-            settings = ?,
-            staticData = ?,
-            pinData = ?,
-            versionId = ?,
-            activeVersionId = ?,
-            versionCounter = ?,
-            updatedAt = STRFTIME('%Y-%m-%d %H:%M:%f', 'NOW')
-        WHERE id = ?
-        """,
-        (
-            nodes_json,
-            connections_json,
-            settings,
-            static_data,
-            pin_data,
-            version_id,
-            version_id,
-            version_counter,
-            WORKFLOW_IDS["upload"],
-        ),
+    updated = n8n_client.update_workflow(
+        workflow_id,
+        {
+            "name": row.get("name") or MANAGED_WORKFLOWS["upload"],
+            "nodes": rebuilt_nodes,
+            "connections": connections,
+            "settings": workflow_settings,
+        },
     )
-    cur.execute(
-        """
-        INSERT INTO workflow_history (
-            versionId,
-            workflowId,
-            authors,
-            createdAt,
-            updatedAt,
-            nodes,
-            connections,
-            name,
-            autosaved,
-            description
-        )
-        VALUES (
-            ?,
-            ?,
-            'dashboard',
-            STRFTIME('%Y-%m-%d %H:%M:%f', 'NOW'),
-            STRFTIME('%Y-%m-%d %H:%M:%f', 'NOW'),
-            ?,
-            ?,
-            ?,
-            0,
-            ?
-        )
-        """,
-        (version_id, WORKFLOW_IDS["upload"], nodes_json, connections_json, row["name"], row["description"]),
-    )
-    conn.commit()
-    conn.close()
     return {
-        "versionId": version_id,
+        "versionId": updated.get("versionId"),
         "accounts": [item["account_name"] for item in accounts],
         "branchCount": len(accounts),
     }
@@ -724,11 +649,7 @@ def create_account(payload: dict) -> dict:
     if not serial_slug:
         raise ValueError("serialSlug is required")
 
-    credential = fetch_one(
-        "SELECT id, name, type FROM credentials_entity WHERE id = ? AND type = 'youTubeOAuth2Api'",
-        (credential_id,),
-        db=N8N_DB,
-    )
+    credential = next((item for item in list_youtube_credentials() if str(item["id"]) == credential_id), None)
     if not credential:
         raise KeyError("Credential not found")
 
@@ -975,59 +896,6 @@ def dashboard_payload() -> dict:
     }
 
 
-def docker_exec_capture(container_name: str, command: list[str]) -> dict:
-    status, body = docker_socket_request(
-        "POST",
-        f"/v1.41/containers/{container_name}/exec",
-        {
-            "AttachStdout": True,
-            "AttachStderr": True,
-            "Tty": True,
-            "Cmd": command,
-        },
-    )
-    if status not in (200, 201):
-        raise RuntimeError(f"Docker exec create failed: HTTP {status} {body.decode('utf-8', errors='ignore')}")
-    payload = json.loads(body.decode("utf-8") or "{}")
-    exec_id = payload.get("Id")
-    if not exec_id:
-        raise RuntimeError("Docker exec create did not return Id")
-    status, body = docker_socket_request(
-        "POST",
-        f"/v1.41/exec/{exec_id}/start",
-        {"Detach": False, "Tty": True},
-    )
-    if status not in (200, 204):
-        raise RuntimeError(f"Docker exec start failed: HTTP {status} {body.decode('utf-8', errors='ignore')}")
-    inspect_status, inspect_body = docker_socket_request("GET", f"/v1.41/exec/{exec_id}/json")
-    if inspect_status != 200:
-        raise RuntimeError(
-            f"Docker exec inspect failed: HTTP {inspect_status} {inspect_body.decode('utf-8', errors='ignore')}"
-        )
-    inspect = json.loads(inspect_body.decode("utf-8") or "{}")
-    return {
-        "execId": exec_id,
-        "exitCode": inspect.get("ExitCode"),
-        "output": body.decode("utf-8", errors="ignore"),
-    }
-
-
-def export_youtube_credential_decrypted(credential_id: str) -> dict:
-    result = docker_exec_capture(
-        N8N_CONTAINER,
-        ["n8n", "export:credentials", "--id", str(credential_id), "--decrypted"],
-    )
-    if result.get("exitCode") not in (0, None):
-        raise RuntimeError(result.get("output") or "Failed to export credential")
-    try:
-        exported = json.loads(result.get("output") or "[]")
-    except json.JSONDecodeError as exc:
-        raise RuntimeError("Could not parse decrypted credential export") from exc
-    if not exported:
-        raise RuntimeError("Credential export returned no data")
-    return exported[0]
-
-
 def refresh_google_access_token(credential_payload: dict) -> str:
     data = credential_payload.get("data") or {}
     oauth = data.get("oauthTokenData") or {}
@@ -1057,6 +925,10 @@ def refresh_google_access_token(credential_payload: dict) -> str:
     if not access_token:
         raise RuntimeError("Google OAuth token refresh did not return access_token")
     return str(access_token)
+
+
+def export_youtube_credential_decrypted(credential_id: str) -> dict:
+    raise RuntimeError("Live YouTube analytics is disabled: the dashboard never reads or decrypts n8n credentials")
 
 
 def youtube_api_get(access_token: str, path: str, params: dict) -> dict:
@@ -1387,48 +1259,27 @@ def upload_readiness_summary() -> dict:
 
 
 def workflow_status_rows() -> list[dict]:
-    workflows = fetch_all(
-        """
-        SELECT id, name, active, updatedAt
-        FROM workflow_entity
-        WHERE isArchived = 0
-        ORDER BY name
-        """,
-        db=N8N_DB,
-    )
-    conn = db_conn(N8N_DB)
-    cur = conn.cursor()
+    workflows = n8n_client.list_workflows()
+    executions = n8n_client.list_executions(limit=100)
     rows: list[dict] = []
     for workflow in workflows:
-        last_execution = cur.execute(
-            """
-            SELECT id, status, startedAt, stoppedAt, finished
-            FROM execution_entity
-            WHERE workflowId = ?
-            ORDER BY id DESC
-            LIMIT 1
-            """,
-            (workflow["id"],),
-        ).fetchone()
-        running_count = cur.execute(
-            """
-            SELECT COUNT(*) AS c
-            FROM execution_entity
-            WHERE workflowId = ?
-              AND status = 'running'
-              AND finished = 0
-            """,
-            (workflow["id"],),
-        ).fetchone()["c"]
-        row = dict(workflow)
-        row["active"] = int(row["active"])
-        row["runningCount"] = int(running_count)
-        row["isRunning"] = int(running_count) > 0
-        row["lastExecution"] = dict(last_execution) if last_execution else None
+        workflow_id = str(workflow.get("id"))
+        matching = [item for item in executions if str(item.get("workflowId")) == workflow_id]
+        matching.sort(key=lambda item: int(item.get("id") or 0), reverse=True)
+        running_count = sum(1 for item in matching if item.get("status") in {"running", "new"})
+        row = {
+            "id": workflow_id,
+            "name": workflow.get("name") or workflow_id,
+            "active": int(bool(workflow.get("active"))),
+            "updatedAt": workflow.get("updatedAt"),
+            "runningCount": running_count,
+            "isRunning": running_count > 0,
+            "lastExecution": matching[0] if matching else None,
+            "canStop": False,
+        }
         row["canRunManually"] = workflow["name"] in MANAGED_WORKFLOWS.values()
         row["runKey"] = next((key for key, value in MANAGED_WORKFLOWS.items() if value == workflow["name"]), None)
         rows.append(row)
-    conn.close()
     return rows
 
 
@@ -1647,40 +1498,27 @@ def summarize_workflow_status(row: dict, progress: dict[int, dict], runtime: dic
 
 
 def workflow_error_rows(limit: int = 12) -> list[dict]:
-    conn = db_conn(N8N_DB)
-    cur = conn.cursor()
-    rows = []
-    for row in cur.execute(
-        """
-        SELECT
-            e.id AS execution_id,
-            e.workflowId AS workflow_id,
-            e.status,
-            e.startedAt,
-            e.stoppedAt,
-            w.name AS workflow_name,
-            d.data AS raw_data
-        FROM execution_entity e
-        JOIN workflow_entity w ON w.id = e.workflowId
-        LEFT JOIN execution_data d ON d.executionId = e.id
-        WHERE e.status = 'error'
-        ORDER BY e.id DESC
-        LIMIT ?
-        """,
-        (limit,),
-    ).fetchall():
-        item = dict(row)
-        details = extract_error_details(item.pop("raw_data", None))
-        item.update(details)
-        rows.append(item)
-    conn.close()
-    return rows
+    workflows = {str(item.get("id")): item.get("name") for item in n8n_client.list_workflows()}
+    rows = n8n_client.list_executions(status="error", limit=limit)
+    return [
+        {
+            "execution_id": item.get("id"),
+            "workflow_id": item.get("workflowId"),
+            "status": item.get("status") or "error",
+            "startedAt": item.get("startedAt"),
+            "stoppedAt": item.get("stoppedAt"),
+            "workflow_name": workflows.get(str(item.get("workflowId")), "Unknown workflow"),
+            "lastNode": None,
+            "description": None,
+            "message": item.get("error", {}).get("message") if isinstance(item.get("error"), dict) else None,
+            "httpCode": None,
+        }
+        for item in rows
+    ]
 
 
 def workflow_payload() -> dict:
-    progress = event_progress_by_execution()
-    runtime = workflow_runtime_from_events()
-    statuses = [summarize_workflow_status(item, progress, runtime) for item in workflow_status_rows()]
+    statuses = [summarize_workflow_status(item, {}, {}) for item in workflow_status_rows()]
     errors = workflow_error_rows()
     return {
         "generatedAt": datetime.utcnow().isoformat() + "Z",
@@ -1690,106 +1528,18 @@ def workflow_payload() -> dict:
     }
 
 
-def helper_post(path: str, payload: dict) -> dict:
-    data = json.dumps(payload, ensure_ascii=False).encode("utf-8")
-    request = urllib.request.Request(
-        f"{HOST_DB_HELPER}{path}",
-        method="POST",
-        headers={"Content-Type": "application/json"},
-        data=data,
-    )
-    with urllib.request.urlopen(request, timeout=30) as response:
-        body = response.read().decode("utf-8")
-        return json.loads(body or "{}")
-
-
-def docker_socket_request(method: str, path: str, payload: dict | None = None) -> tuple[int, bytes]:
-    body = json.dumps(payload, ensure_ascii=False).encode("utf-8") if payload is not None else b""
-    headers = [
-        f"{method} {path} HTTP/1.1",
-        "Host: docker",
-        "Connection: close",
-    ]
-    if body:
-        headers.extend(
-            [
-                "Content-Type: application/json",
-                f"Content-Length: {len(body)}",
-            ]
-        )
-    request_bytes = ("\r\n".join(headers) + "\r\n\r\n").encode("utf-8") + body
-
-    sock = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+def health_payload() -> dict:
+    databases = database_status()
     try:
-        sock.connect(DOCKER_SOCKET_PATH)
-        sock.sendall(request_bytes)
-        chunks = []
-        while True:
-            data = sock.recv(65536)
-            if not data:
-                break
-            chunks.append(data)
-    finally:
-        sock.close()
-
-    raw = b"".join(chunks)
-    header_bytes, _, response_body = raw.partition(b"\r\n\r\n")
-    header_lines = header_bytes.decode("utf-8", errors="ignore").split("\r\n")
-    status_line = header_lines[0] if header_lines else ""
-    lower_headers = [line.lower() for line in header_lines[1:]]
-    try:
-        status_code = int(status_line.split(" ")[1])
-    except Exception as exc:
-        raise RuntimeError(f"Unexpected Docker API response: {status_line}") from exc
-    if any("transfer-encoding: chunked" in line for line in lower_headers):
-        decoded = b""
-        remainder = response_body
-        while remainder:
-            line, _, remainder = remainder.partition(b"\r\n")
-            if not line:
-                break
-            chunk_size = int(line.decode("utf-8").strip(), 16)
-            if chunk_size == 0:
-                break
-            decoded += remainder[:chunk_size]
-            remainder = remainder[chunk_size:]
-            if remainder.startswith(b"\r\n"):
-                remainder = remainder[2:]
-        response_body = decoded
-    return status_code, response_body
-
-
-def docker_exec_in_container(container_name: str, command: list[str]) -> dict:
-    status, body = docker_socket_request(
-        "POST",
-        f"/v1.41/containers/{container_name}/exec",
-        {
-            "AttachStdout": False,
-            "AttachStderr": False,
-            "Tty": False,
-            "Cmd": command,
-        },
-    )
-    if status not in (200, 201):
-        raise RuntimeError(f"Docker exec create failed: HTTP {status} {body.decode('utf-8', errors='ignore')}")
-    payload = json.loads(body.decode("utf-8") or "{}")
-    exec_id = payload.get("Id")
-    if not exec_id:
-        raise RuntimeError("Docker exec create did not return Id")
-    status, body = docker_socket_request(
-        "POST",
-        f"/v1.41/exec/{exec_id}/start",
-        {"Detach": True, "Tty": False},
-    )
-    if status not in (200, 204):
-        raise RuntimeError(f"Docker exec start failed: HTTP {status} {body.decode('utf-8', errors='ignore')}")
-    return {"execId": exec_id}
-
-
-def docker_restart_container(container_name: str) -> None:
-    status, body = docker_socket_request("POST", f"/v1.41/containers/{container_name}/restart")
-    if status != 204:
-        raise RuntimeError(f"Docker restart failed: HTTP {status} {body.decode('utf-8', errors='ignore')}")
+        n8n = n8n_client.health()
+    except N8NError as exc:
+        n8n = {"available": False, "configured": n8n_client.configured, "error": str(exc)}
+    return {
+        "status": "ok" if all(item["ready"] for item in databases) else "degraded",
+        "generatedAt": datetime.utcnow().isoformat() + "Z",
+        "databases": databases,
+        "n8n": n8n,
+    }
 
 
 def parse_client_datetime(value: str) -> str:
@@ -1807,40 +1557,18 @@ def parse_client_datetime(value: str) -> str:
 
 
 def resolve_workflow_id(run_key: str) -> str:
-    workflow_name = MANAGED_WORKFLOWS.get(run_key)
-    if not workflow_name:
+    workflow_id = WORKFLOW_IDS.get(run_key)
+    if not workflow_id:
         raise KeyError(run_key)
-    row = fetch_one("SELECT id FROM workflow_entity WHERE name = ? AND isArchived = 0", (workflow_name,), db=N8N_DB)
-    if not row:
-        raise KeyError(run_key)
-    return str(row["id"])
+    return workflow_id
 
 
 def trigger_workflow(run_key: str) -> None:
-    if run_key == "render":
-        workflow_id = WORKFLOW_IDS.get(run_key)
-        if not workflow_id:
-            raise KeyError(run_key)
-        docker_exec_in_container(N8N_CONTAINER, ["n8n", "execute", f"--id={workflow_id}"])
-        state = read_control_state()
-        stopped = state.get("stoppedAt") or {}
-        if run_key in stopped:
-            stopped.pop(run_key, None)
-            state["stoppedAt"] = stopped
-            write_control_state(state)
-        return
-
-    path = MANUAL_WEBHOOKS.get(run_key)
-    if not path:
+    urls = {"render": settings.render_webhook_url, "upload": settings.upload_webhook_url}
+    url = urls.get(run_key)
+    if not url:
         raise KeyError(run_key)
-    request = urllib.request.Request(
-        f"{N8N_BASE_URL}/webhook/{path}",
-        method="POST",
-        headers={"Content-Type": "application/json"},
-        data=b"{}",
-    )
-    with urllib.request.urlopen(request, timeout=20) as response:
-        response.read()
+    post_webhook(url)
     state = read_control_state()
     stopped = state.get("stoppedAt") or {}
     if run_key in stopped:
@@ -1850,12 +1578,7 @@ def trigger_workflow(run_key: str) -> None:
 
 
 def stop_workflow(run_key: str) -> None:
-    docker_restart_container(N8N_CONTAINER)
-    state = read_control_state()
-    stopped = state.get("stoppedAt") or {}
-    stopped[run_key] = datetime.utcnow().isoformat() + "Z"
-    state["stoppedAt"] = stopped
-    write_control_state(state)
+    raise N8NError("Stopping executions is not supported by the configured public n8n API", status=501)
 
 
 class DashboardHandler(BaseHTTPRequestHandler):
@@ -1891,6 +1614,8 @@ class DashboardHandler(BaseHTTPRequestHandler):
             return self._send_file(STATIC_DIR / "app.css", "text/css; charset=utf-8")
         if parsed.path == "/app.js":
             return self._send_file(STATIC_DIR / "app.js", "application/javascript; charset=utf-8")
+        if parsed.path == "/api/health":
+            return self._send_json(health_payload())
         if parsed.path == "/api/dashboard":
             return self._send_json(dashboard_payload())
         if parsed.path == "/api/serials":
@@ -2176,6 +1901,8 @@ class DashboardHandler(BaseHTTPRequestHandler):
         if parsed.path == "/api/workflows/render/run":
             try:
                 trigger_workflow("render")
+            except N8NError as exc:
+                return self._send_json({"error": f"Не удалось запустить Render Queue: {exc}"}, exc.status or 503)
             except Exception as exc:
                 return self._send_json({"error": f"Не удалось запустить Render Queue: {exc}"}, 502)
             return self._send_json({"ok": True, "workflow": "render"})
@@ -2183,40 +1910,37 @@ class DashboardHandler(BaseHTTPRequestHandler):
         if parsed.path == "/api/workflows/upload/run":
             try:
                 trigger_workflow("upload")
+            except N8NError as exc:
+                return self._send_json({"error": f"Не удалось запустить Upload: {exc}"}, exc.status or 503)
             except Exception as exc:
                 return self._send_json({"error": f"Не удалось запустить Upload: {exc}"}, 502)
             return self._send_json({"ok": True, "workflow": "upload"})
 
         if parsed.path == "/api/workflows/render/stop":
-            try:
-                stop_workflow("render")
-            except Exception as exc:
-                return self._send_json({"error": f"Не удалось остановить Render Queue: {exc}"}, 502)
-            return self._send_json({"ok": True, "workflow": "render", "stopped": True})
+            return self._send_json({"error": "Остановка недоступна через публичный n8n API"}, 501)
 
         if parsed.path == "/api/workflows/upload/stop":
-            try:
-                stop_workflow("upload")
-            except Exception as exc:
-                return self._send_json({"error": f"Не удалось остановить Upload: {exc}"}, 502)
-            return self._send_json({"ok": True, "workflow": "upload", "stopped": True})
+            return self._send_json({"error": "Остановка недоступна через публичный n8n API"}, 501)
 
         if parsed.path == "/api/workflows/statuses/delete":
-            payload = self._read_json()
-            workflow_ids = payload.get("workflowIds") or []
-            return self._send_json(helper_post("/delete/statuses", {"workflowIds": workflow_ids}))
+            return self._send_json({"error": "Deleting workflow status is not supported by the public n8n API"}, 501)
 
         if parsed.path == "/api/workflows/errors/delete":
             payload = self._read_json()
             if payload.get("all"):
-                return self._send_json(helper_post("/delete/errors", {"all": True}))
+                return self._send_json({"error": "Bulk deletion is not supported by the public n8n API"}, 501)
             execution_ids = payload.get("executionIds") or []
-            return self._send_json(helper_post("/delete/errors", {"executionIds": execution_ids}))
+            try:
+                deleted = [n8n_client.delete_execution(str(execution_id)) for execution_id in execution_ids]
+            except N8NError as exc:
+                return self._send_json({"error": str(exc)}, exc.status or 503)
+            return self._send_json({"ok": True, "deleted": len(deleted)})
 
         return self._send_json({"error": "Not found"}, 404)
 
 
 def main() -> None:
+    migrate_all(backup_before=True)
     server = ThreadingHTTPServer((HOST, PORT), DashboardHandler)
     print(f"Dashboard listening on http://{HOST}:{PORT}")
     server.serve_forever()

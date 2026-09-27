@@ -25,6 +25,7 @@ input/
 output/
 temp/
 worker/
+backups/
 
 # Logs and archives
 *.log

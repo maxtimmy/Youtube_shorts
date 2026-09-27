@@ -1230,7 +1230,7 @@ function renderWorkflowStatus() {
       retryButton.disabled = workflow.isRunning || pendingAction === "starting" || pendingAction === "stopping";
       retryButton.onclick = () => runWorkflow(workflow.runKey).catch((error) => showToast(error.message, "error"));
       actions.append(retryButton);
-      if (workflow.isRunning || pendingAction === "stopping") {
+      if (workflow.canStop && (workflow.isRunning || pendingAction === "stopping")) {
         const stopButton = el("button", "icon-button danger-button", "■");
         stopButton.title = "Остановить текущий запуск";
         stopButton.disabled = pendingAction === "stopping";

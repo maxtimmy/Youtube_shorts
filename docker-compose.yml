@@ -50,30 +50,25 @@ services:
     container_name: auto_shorts_dashboard
     restart: unless-stopped
     init: true
-    depends_on:
-      n8n:
-        condition: service_healthy
     ports:
       - "127.0.0.1:8787:8787"
     environment:
-      N8N_BASE_URL: ${N8N_BASE_URL:-http://n8n:5678}
-      N8N_CONTAINER_NAME: n8n_local
-      N8N_RENDER_WORKFLOW_ID: ${N8N_RENDER_WORKFLOW_ID:-168805f3-70c2-48ac-a320-fa599235e0c0}
-      N8N_UPLOAD_WORKFLOW_ID: ${N8N_UPLOAD_WORKFLOW_ID:-gsNR0rmVmiG7N2SS}
-      HOST_DB_HELPER_URL: ${HOST_DB_HELPER_URL:-http://host.docker.internal:8790}
-    extra_hosts:
-      - "host.docker.internal:host-gateway"
+      N8N_API_URL: ${N8N_API_URL:-http://n8n:5678/api/v1}
+      N8N_API_KEY: ${N8N_API_KEY:-}
+      N8N_RENDER_WEBHOOK_URL: ${N8N_RENDER_WEBHOOK_URL:-http://n8n:5678/webhook/manual-render-queue}
+      N8N_UPLOAD_WEBHOOK_URL: ${N8N_UPLOAD_WEBHOOK_URL:-http://n8n:5678/webhook/manual-youtube-upload}
+      N8N_RENDER_WORKFLOW_ID: ${N8N_RENDER_WORKFLOW_ID:-}
+      N8N_UPLOAD_WORKFLOW_ID: ${N8N_UPLOAD_WORKFLOW_ID:-}
+      YOUTUBE_CREDENTIALS_JSON: ${YOUTUBE_CREDENTIALS_JSON:-[]}
     volumes:
       - ./dashboard:/app:ro
-      # Temporary compatibility: dashboard currently updates n8n workflow state directly.
-      - n8n_state:/work/n8n-data
       - ./data:/work/data
       - ./input:/work/input
       - ./output:/work/output
       - ./banners:/work/banners:ro
       - ./temp:/work/temp
-      # High privilege: required by the current workflow monitor. Keep dashboard local-only.
-      - /var/run/docker.sock:/var/run/docker.sock
+      - ./backups:/work/backups
+      - ./workflows:/work/workflows
     healthcheck:
       test:
         [
