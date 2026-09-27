@@ -1,0 +1,29 @@
+name: Bug report
+description: Сообщить о воспроизводимой ошибке без публикации секретов
+title: "[Bug]: "
+labels: [bug]
+body:
+  - type: textarea
+    id: description
+    attributes:
+      label: Что произошло
+    validations:
+      required: true
+  - type: textarea
+    id: steps
+    attributes:
+      label: Как воспроизвести
+      placeholder: "1. Запустить…\n2. Открыть…\n3. Увидеть…"
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: Ожидаемое поведение
+    validations:
+      required: true
+  - type: textarea
+    id: environment
+    attributes:
+      label: Окружение
+      description: ОС, Docker/Compose, версия браузера. Удалите токены, cookies и персональные данные.
