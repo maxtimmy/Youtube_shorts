@@ -1,60 +1,91 @@
 services:
   n8n:
-    image: node:20-bookworm
-    env_file:
-      - .env
+    build:
+      context: .
+      dockerfile: Dockerfile.n8n-runtime
     container_name: n8n_local
     restart: unless-stopped
+    init: true
     ports:
-      - "5678:5678"
-    command: ["bash", "/work/temp/bootstrap-n8n.sh"]
+      - "127.0.0.1:5678:5678"
     environment:
-      - N8N_HOST=0.0.0.0
-      - N8N_PORT=5678
-      - N8N_PROTOCOL=http
-      - N8N_EDITOR_BASE_URL=http://localhost:5678
-      - WEBHOOK_URL=http://localhost:5678
-      - NODE_ENV=production
-      - GENERIC_TIMEZONE=Europe/Moscow
-      - TZ=Europe/Moscow
-      - N8N_SECURE_COOKIE=false
-      - N8N_ENABLE_EXECUTE_COMMAND=true
-      - NODE_FUNCTION_ALLOW_BUILTIN=child_process,fs,path
-      - N8N_BLOCK_ENV_ACCESS_IN_NODE=false
-      - N8N_ENFORCE_SETTINGS_FILE_PERMISSIONS=false
-      - DB_SQLITE_POOL_SIZE=1
-      - EXECUTIONS_TIMEOUT=-1
-      - N8N_RUNNERS_TASK_TIMEOUT=604800
-      - N8N_RUNNERS_TASK_REQUEST_TIMEOUT=604800
-      - N8N_RUNNERS_MAX_CONCURRENCY=1
-      - N8N_RUNNERS_HEARTBEAT_INTERVAL=180
-      - OPENAI_API_KEY=${OPENAI_API_KEY}
+      N8N_HOST: 0.0.0.0
+      N8N_PORT: 5678
+      N8N_PROTOCOL: http
+      N8N_EDITOR_BASE_URL: http://localhost:5678
+      WEBHOOK_URL: http://localhost:5678
+      NODE_ENV: production
+      GENERIC_TIMEZONE: ${N8N_TIMEZONE:-Europe/Moscow}
+      TZ: ${N8N_TIMEZONE:-Europe/Moscow}
+      N8N_SECURE_COOKIE: ${N8N_SECURE_COOKIE:-false}
+      N8N_ENCRYPTION_KEY: ${N8N_ENCRYPTION_KEY:?Set N8N_ENCRYPTION_KEY in .env}
+      N8N_ENABLE_EXECUTE_COMMAND: "true"
+      NODE_FUNCTION_ALLOW_BUILTIN: child_process,fs,path
+      N8N_BLOCK_ENV_ACCESS_IN_NODE: "false"
+      N8N_ENFORCE_SETTINGS_FILE_PERMISSIONS: "true"
+      DB_SQLITE_POOL_SIZE: 1
+      EXECUTIONS_TIMEOUT: -1
+      N8N_RUNNERS_TASK_TIMEOUT: 604800
+      N8N_RUNNERS_TASK_REQUEST_TIMEOUT: 604800
+      N8N_RUNNERS_MAX_CONCURRENCY: 1
+      N8N_RUNNERS_HEARTBEAT_INTERVAL: 180
+      OPENAI_API_KEY: ${OPENAI_API_KEY:-}
     volumes:
       - n8n_state:/home/node/.n8n
       - ./input:/work/input
       - ./output:/work/output
-      - ./banners:/work/banners
+      - ./banners:/work/banners:ro
       - ./temp:/work/temp
+    healthcheck:
+      test: ["CMD", "curl", "--fail", "--silent", "http://localhost:5678/healthz"]
+      interval: 15s
+      timeout: 5s
+      retries: 10
+      start_period: 30s
+
   dashboard:
     build:
       context: .
       dockerfile: dashboard/Dockerfile
-    env_file:
-      - .env
     container_name: auto_shorts_dashboard
     restart: unless-stopped
+    init: true
+    depends_on:
+      n8n:
+        condition: service_healthy
     ports:
-      - "8787:8787"
+      - "127.0.0.1:8787:8787"
+    environment:
+      N8N_BASE_URL: ${N8N_BASE_URL:-http://n8n:5678}
+      N8N_CONTAINER_NAME: n8n_local
+      N8N_RENDER_WORKFLOW_ID: ${N8N_RENDER_WORKFLOW_ID:-168805f3-70c2-48ac-a320-fa599235e0c0}
+      N8N_UPLOAD_WORKFLOW_ID: ${N8N_UPLOAD_WORKFLOW_ID:-gsNR0rmVmiG7N2SS}
+      HOST_DB_HELPER_URL: ${HOST_DB_HELPER_URL:-http://host.docker.internal:8790}
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
     volumes:
-      - ./dashboard:/app
+      - ./dashboard:/app:ro
+      # Temporary compatibility: dashboard currently updates n8n workflow state directly.
       - n8n_state:/work/n8n-data
       - ./data:/work/data
       - ./input:/work/input
       - ./output:/work/output
-      - ./banners:/work/banners
+      - ./banners:/work/banners:ro
       - ./temp:/work/temp
+      # High privilege: required by the current workflow monitor. Keep dashboard local-only.
       - /var/run/docker.sock:/var/run/docker.sock
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "python",
+          "-c",
+          "import urllib.request; urllib.request.urlopen('http://localhost:8787/', timeout=3)",
+        ]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+
 volumes:
   n8n_state:
-    name: n8n_state
-    external: true

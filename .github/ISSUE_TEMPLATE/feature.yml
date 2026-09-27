@@ -1,0 +1,31 @@
+name: Feature request
+description: Предложить улучшение продукта или процесса
+title: "[Feature]: "
+labels: [enhancement]
+body:
+  - type: textarea
+    id: problem
+    attributes:
+      label: Проблема
+      description: Какую пользовательскую проблему нужно решить?
+    validations:
+      required: true
+  - type: textarea
+    id: outcome
+    attributes:
+      label: Ожидаемый результат
+      description: Опишите наблюдаемый результат и критерии приёмки.
+    validations:
+      required: true
+  - type: textarea
+    id: rights
+    attributes:
+      label: Источники, права и платформенные правила
+      description: Если функция касается контента или публикации, перечислите источники, основание использования и ручные проверки.
+  - type: checkboxes
+    id: safety
+    attributes:
+      label: Проверка scope
+      options:
+        - label: Предложение не требует перезалива чужого контента, обхода ограничений или массового спама.
+          required: true

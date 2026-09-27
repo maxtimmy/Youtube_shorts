@@ -1,4 +1,5 @@
 import json
+import os
 import re
 import shutil
 import socket
@@ -19,23 +20,23 @@ PUBLISH_DB = Path("/work/output/youtube-publishing.sqlite")
 N8N_DB = Path("/work/n8n-data/database.sqlite")
 INPUT_ROOT = Path("/work/input")
 EVENT_LOG_PATH = Path("/work/n8n-data/n8nEventLog.log")
-HOST = "0.0.0.0"
-PORT = 8787
-N8N_CONTAINER = "n8n_local"
+HOST = os.getenv("DASHBOARD_HOST", "0.0.0.0")
+PORT = int(os.getenv("DASHBOARD_PORT", "8787"))
+N8N_CONTAINER = os.getenv("N8N_CONTAINER_NAME", "n8n_local")
 MANAGED_WORKFLOWS = {
     "render": "Auto Shorts - Render Queue",
     "upload": "Auto Shorts - YouTube Upload",
 }
 WORKFLOW_IDS = {
-    "render": "168805f3-70c2-48ac-a320-fa599235e0c0",
-    "upload": "gsNR0rmVmiG7N2SS",
+    "render": os.getenv("N8N_RENDER_WORKFLOW_ID", "168805f3-70c2-48ac-a320-fa599235e0c0"),
+    "upload": os.getenv("N8N_UPLOAD_WORKFLOW_ID", "gsNR0rmVmiG7N2SS"),
 }
 MANUAL_WEBHOOKS = {
     "render": "manual-render-queue",
     "upload": "manual-youtube-upload",
 }
-HOST_DB_HELPER = "http://host.docker.internal:8790"
-N8N_BASE_URL = "http://host.docker.internal:5678"
+HOST_DB_HELPER = os.getenv("HOST_DB_HELPER_URL", "http://host.docker.internal:8790").rstrip("/")
+N8N_BASE_URL = os.getenv("N8N_BASE_URL", "http://n8n:5678").rstrip("/")
 DOCKER_SOCKET_PATH = "/var/run/docker.sock"
 CONTROL_STATE_PATH = Path("/work/temp/dashboard-control-state.json")
 WORKFLOW_STEP_HINTS = {
@@ -201,8 +202,10 @@ def account_lookup(account_slug: str) -> dict | None:
 def media_summary() -> dict:
     conn = db_conn(MEDIA_DB)
     cur = conn.cursor()
-    db_serials = [dict(row) for row in cur.execute(
-        """
+    db_serials = [
+        dict(row)
+        for row in cur.execute(
+            """
         SELECT
             s.serial_slug,
             s.serial_name,
@@ -214,7 +217,8 @@ def media_summary() -> dict:
         GROUP BY s.id
         ORDER BY s.serial_name
         """
-    ).fetchall()]
+        ).fetchall()
+    ]
     conn.close()
 
     serial_map = {
@@ -289,8 +293,10 @@ def serial_detail(serial_slug: str) -> dict:
         (serial_slug,),
     ).fetchall():
         episode = dict(row)
-        episode["shorts"] = [dict(short_row) for short_row in cur.execute(
-            """
+        episode["shorts"] = [
+            dict(short_row)
+            for short_row in cur.execute(
+                """
             SELECT
                 sh.short_name,
                 sh.short_part,
@@ -306,8 +312,9 @@ def serial_detail(serial_slug: str) -> dict:
               AND e.episode_base_name = ?
             ORDER BY sh.short_part
             """,
-            (serial_slug, row["episode_base_name"]),
-        ).fetchall()]
+                (serial_slug, row["episode_base_name"]),
+            ).fetchall()
+        ]
         episodes.append(episode)
 
     serial_payload = dict(serial)
@@ -393,8 +400,10 @@ def account_rows() -> list[dict]:
     conn.row_factory = sqlite3.Row
     cur = conn.cursor()
     cur.execute("ATTACH DATABASE ? AS media", (str(MEDIA_DB),))
-    rows = [dict(row) for row in cur.execute(
-        """
+    rows = [
+        dict(row)
+        for row in cur.execute(
+            """
         SELECT
             a.id,
             a.account_slug,
@@ -438,7 +447,8 @@ def account_rows() -> list[dict]:
         WHERE a.account_slug <> 'default'
         ORDER BY a.is_active DESC, a.account_name
         """.format(published_status_sql=PUBLISHED_STATUS_SQL)
-    ).fetchall()]
+        ).fetchall()
+    ]
     conn.close()
     return rows
 
@@ -605,7 +615,9 @@ def rebuild_upload_workflow() -> dict:
     }
 
     if branch_specs:
-        connections["Generate YouTube Metadata"] = {"main": [[{"node": branch_specs[0]["if"], "type": "main", "index": 0}]]}
+        connections["Generate YouTube Metadata"] = {
+            "main": [[{"node": branch_specs[0]["if"], "type": "main", "index": 0}]]
+        }
     else:
         connections["Generate YouTube Metadata"] = {"main": [[]]}
 
@@ -618,10 +630,12 @@ def rebuild_upload_workflow() -> dict:
             ]
         }
         connections[branch["read"]] = {
-            "main": [[
-                {"node": branch["upload"], "type": "main", "index": 0},
-                {"node": branch["merge"], "type": "main", "index": 0},
-            ]]
+            "main": [
+                [
+                    {"node": branch["upload"], "type": "main", "index": 0},
+                    {"node": branch["merge"], "type": "main", "index": 0},
+                ]
+            ]
         }
         connections[branch["upload"]] = {"main": [[{"node": branch["merge"], "type": "main", "index": 1}]]}
         connections[branch["merge"]] = {"main": [[{"node": "Record Upload In DB", "type": "main", "index": 0}]]}
@@ -688,14 +702,20 @@ def rebuild_upload_workflow() -> dict:
     )
     conn.commit()
     conn.close()
-    return {"versionId": version_id, "accounts": [item["account_name"] for item in accounts], "branchCount": len(accounts)}
+    return {
+        "versionId": version_id,
+        "accounts": [item["account_name"] for item in accounts],
+        "branchCount": len(accounts),
+    }
 
 
 def create_account(payload: dict) -> dict:
     account_name = str(payload.get("accountName") or "").strip()
     credential_id = str(payload.get("credentialId") or "").strip()
     serial_slug = str(payload.get("serialSlug") or "").strip()
-    slots = sorted({normalize for normalize in (str(slot).strip() for slot in (payload.get("slots") or [])) if normalize})
+    slots = sorted(
+        {normalize for normalize in (str(slot).strip() for slot in (payload.get("slots") or [])) if normalize}
+    )
 
     if not account_name:
         raise ValueError("accountName is required")
@@ -712,7 +732,9 @@ def create_account(payload: dict) -> dict:
     if not credential:
         raise KeyError("Credential not found")
 
-    serial = fetch_one("SELECT serial_slug, serial_name FROM serials WHERE serial_slug = ?", (serial_slug,), db=MEDIA_DB)
+    serial = fetch_one(
+        "SELECT serial_slug, serial_name FROM serials WHERE serial_slug = ?", (serial_slug,), db=MEDIA_DB
+    )
     if not serial:
         raise KeyError("Serial not found")
 
@@ -979,7 +1001,9 @@ def docker_exec_capture(container_name: str, command: list[str]) -> dict:
         raise RuntimeError(f"Docker exec start failed: HTTP {status} {body.decode('utf-8', errors='ignore')}")
     inspect_status, inspect_body = docker_socket_request("GET", f"/v1.41/exec/{exec_id}/json")
     if inspect_status != 200:
-        raise RuntimeError(f"Docker exec inspect failed: HTTP {inspect_status} {inspect_body.decode('utf-8', errors='ignore')}")
+        raise RuntimeError(
+            f"Docker exec inspect failed: HTTP {inspect_status} {inspect_body.decode('utf-8', errors='ignore')}"
+        )
     inspect = json.loads(inspect_body.decode("utf-8") or "{}")
     return {
         "execId": exec_id,
@@ -1165,7 +1189,7 @@ def youtube_analytics_payload() -> dict:
 
             stats_by_video: dict[str, dict] = {}
             for index in range(0, len(ordered_ids), 50):
-                chunk = ordered_ids[index:index + 50]
+                chunk = ordered_ids[index : index + 50]
                 response = youtube_api_get(
                     access_token,
                     "videos",
@@ -1232,6 +1256,7 @@ def extract_error_details(raw_data: str | None) -> dict:
     try:
         compact = json.loads(text)
         if isinstance(compact, list) and compact:
+
             def resolve(value, seen: set[int] | None = None):
                 if seen is None:
                     seen = set()
@@ -1265,7 +1290,7 @@ def extract_error_details(raw_data: str | None) -> dict:
         if not found:
             return None
         value = found.group(1)
-        return value.replace("\\n", "\n").replace("\\\"", "\"")
+        return value.replace("\\n", "\n").replace('\\"', '"')
 
     return {
         "lastNode": match(r'"lastNodeExecuted":"([^"]+)"'),
@@ -1344,11 +1369,20 @@ def upload_readiness_summary() -> dict:
     conn.close()
 
     if active_accounts == 0:
-        return {"statusLabel": "Нет активных аккаунтов", "statusDetail": "Для загрузки нет включенных аккаунтов с credentials"}
+        return {
+            "statusLabel": "Нет активных аккаунтов",
+            "statusDetail": "Для загрузки нет включенных аккаунтов с credentials",
+        }
     if unblocked_accounts == 0:
-        return {"statusLabel": "Все аккаунты на timeout", "statusDetail": "Сейчас нет ни одного аккаунта, доступного для загрузки"}
+        return {
+            "statusLabel": "Все аккаунты на timeout",
+            "statusDetail": "Сейчас нет ни одного аккаунта, доступного для загрузки",
+        }
     if selectable_accounts == 0:
-        return {"statusLabel": "Нет доступных шортсов", "statusDetail": "Для активных аккаунтов сейчас нечего загружать"}
+        return {
+            "statusLabel": "Нет доступных шортсов",
+            "statusDetail": "Для активных аккаунтов сейчас нечего загружать",
+        }
     return {"statusLabel": "Готов к запуску", "statusDetail": "Есть доступные аккаунты и шортсы для загрузки"}
 
 
@@ -1531,7 +1565,7 @@ def summarize_workflow_status(row: dict, progress: dict[int, dict], runtime: dic
     execution_id = last_execution.get("id")
     runtime_entry = runtime.get(str(row.get("id")))
     control_state = read_control_state()
-    stop_marker = ((control_state.get("stoppedAt") or {}).get(row.get("runKey")))
+    stop_marker = (control_state.get("stoppedAt") or {}).get(row.get("runKey"))
     if runtime_entry and runtime_entry.get("isRunning"):
         row["isRunning"] = True
         execution_id = runtime_entry.get("executionId")
@@ -1546,7 +1580,9 @@ def summarize_workflow_status(row: dict, progress: dict[int, dict], runtime: dic
             row["lastExecution"] = last_execution
     progress_entry = progress.get(int(execution_id)) if execution_id else None
     run_key = row.get("runKey")
-    current_node = normalize_step_name(run_key, (progress_entry or {}).get("nodeName") or (runtime_entry or {}).get("currentNode"))
+    current_node = normalize_step_name(
+        run_key, (progress_entry or {}).get("nodeName") or (runtime_entry or {}).get("currentNode")
+    )
     steps = WORKFLOW_STEP_HINTS.get(run_key, [])
     current_step_index = None
     last_event_at = (progress_entry or {}).get("lastEventAt") or (runtime_entry or {}).get("lastEventAt")
@@ -1602,7 +1638,9 @@ def summarize_workflow_status(row: dict, progress: dict[int, dict], runtime: dic
     row["currentNode"] = current_node
     row["currentStepIndex"] = current_step_index
     row["stepTotal"] = len(steps) if steps else None
-    row["progressPercent"] = int((current_step_index / len(steps)) * 100) if current_step_index and steps and row.get("isRunning") else None
+    row["progressPercent"] = (
+        int((current_step_index / len(steps)) * 100) if current_step_index and steps and row.get("isRunning") else None
+    )
     row["lastEventAt"] = last_event_at
     row["runSource"] = (progress_entry or {}).get("source") or (runtime_entry or {}).get("source")
     return row
@@ -1982,7 +2020,9 @@ class DashboardHandler(BaseHTTPRequestHandler):
             serial_slug = str(payload.get("serialSlug") or "").strip()
             if not serial_slug:
                 return self._send_json({"error": "serialSlug is required"}, 400)
-            serial = fetch_one("SELECT serial_slug, serial_name FROM serials WHERE serial_slug = ?", (serial_slug,), db=MEDIA_DB)
+            serial = fetch_one(
+                "SELECT serial_slug, serial_name FROM serials WHERE serial_slug = ?", (serial_slug,), db=MEDIA_DB
+            )
             account = account_lookup(account_slug)
             if not serial or not account:
                 return self._send_json({"error": "Account or serial not found"}, 404)
@@ -2095,7 +2135,9 @@ class DashboardHandler(BaseHTTPRequestHandler):
             deleted = cur.rowcount
             conn.commit()
             conn.close()
-            return self._send_json({"ok": True, "accountSlug": account_slug, "deleted": deleted, "cooldownId": cooldown_id})
+            return self._send_json(
+                {"ok": True, "accountSlug": account_slug, "deleted": deleted, "cooldownId": cooldown_id}
+            )
 
         if parsed.path.startswith("/api/accounts/") and parsed.path.endswith("/toggle-active"):
             account_slug = unquote(parsed.path.split("/api/accounts/", 1)[1].rsplit("/toggle-active", 1)[0])
@@ -2103,7 +2145,10 @@ class DashboardHandler(BaseHTTPRequestHandler):
             if not account:
                 return self._send_json({"error": "Account not found"}, 404)
             new_value = 0 if int(account["is_active"]) else 1
-            execute("UPDATE youtube_accounts SET is_active = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?", (new_value, account["id"]))
+            execute(
+                "UPDATE youtube_accounts SET is_active = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?",
+                (new_value, account["id"]),
+            )
             return self._send_json({"ok": True, "accountSlug": account_slug, "isActive": new_value})
 
         if parsed.path.startswith("/api/accounts/") and parsed.path.endswith("/schedule-slots"):

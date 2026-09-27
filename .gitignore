@@ -14,6 +14,10 @@ __pycache__/
 *.pyc
 *.pyo
 .pytest_cache/
+.ruff_cache/
+.mypy_cache/
+.venv/
+venv/
 
 # Runtime state and generated assets
 data/
@@ -40,6 +44,15 @@ worker/
 *.wav
 *.mp3
 *.ass
+*.srt
+*.vtt
+*.webm
+*.m4a
+
+# Local reports and coverage
+.coverage
+coverage.xml
+htmlcov/
 
 # Node / npm leftovers
 node_modules/
