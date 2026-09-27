@@ -1,4 +1,17 @@
-FROM node:20-bookworm
+FROM n8nio/n8n:2.8.4 AS n8n_dist
+
+FROM node:22-bookworm AS n8n_builder
+
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    build-essential \
+    python3 \
+    && rm -rf /var/lib/apt/lists/*
+
+COPY --from=n8n_dist /usr/local/lib/node_modules/n8n /usr/local/lib/node_modules/n8n
+RUN cd /usr/local/lib/node_modules/n8n/node_modules/.pnpm/sqlite3@5.1.7/node_modules/sqlite3 && \
+    npm rebuild sqlite3 --build-from-source
+
+FROM node:22-bookworm
 
 USER root
 
@@ -8,12 +21,10 @@ RUN apt-get update && apt-get install -y \
     python3-pip \
     bash \
     curl \
-    tini \
     && rm -rf /var/lib/apt/lists/*
 
-RUN npm config set fund false && \
-    npm config set audit false && \
-    npm install -g n8n@2.8.4 --legacy-peer-deps
+COPY --from=n8n_builder /usr/local/lib/node_modules/n8n /usr/local/lib/node_modules/n8n
+RUN ln -s /usr/local/lib/node_modules/n8n/bin/n8n /usr/local/bin/n8n
 
 RUN pip3 install --break-system-packages --no-cache-dir \
     faster-whisper
@@ -28,5 +39,4 @@ EXPOSE 5678
 USER node
 WORKDIR /home/node
 
-ENTRYPOINT ["tini", "--"]
 CMD ["n8n", "start"]
