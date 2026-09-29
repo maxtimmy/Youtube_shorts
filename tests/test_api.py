@@ -71,15 +71,30 @@ def test_api_smoke_on_temporary_databases(tmp_path, monkeypatch):
     monkeypatch.setattr(server, "PUBLISH_DB", publishing)
     monkeypatch.setattr(server, "INPUT_ROOT", tmp_path / "input")
     monkeypatch.setattr(server, "n8n_client", FakeN8N())
+    monkeypatch.setattr(server, "post_webhook", lambda url: {"ok": True})
     monkeypatch.setattr(
         server,
         "settings",
-        SimpleNamespace(youtube_credentials=lambda: [{"id": "credential-id", "name": "Demo credential"}]),
+        SimpleNamespace(
+            youtube_credentials=lambda: [{"id": "credential-id", "name": "Demo credential"}],
+            render_webhook_url="http://n8n/render",
+            upload_webhook_url="http://n8n/upload",
+        ),
     )
     server.WORKFLOW_IDS["upload"] = "upload-id"
     database.migrate_all(backup_before=False)
     with database.connect(media) as conn:
         conn.execute("INSERT INTO serials(serial_slug, serial_name) VALUES ('demo', 'Demo')")
+        serial_id = conn.execute("SELECT id FROM serials WHERE serial_slug = 'demo'").fetchone()[0]
+        conn.execute(
+            "INSERT INTO episodes(serial_id, episode_base_name, file_name) VALUES (?, 'Demo01', 'Demo01.mp4')",
+            (serial_id,),
+        )
+        episode_id = conn.execute("SELECT id FROM episodes WHERE episode_base_name = 'Demo01'").fetchone()[0]
+        conn.execute(
+            "INSERT INTO shorts(episode_id, short_name, final_path) VALUES (?, 'Demo01_part01', '/tmp/demo.mp4')",
+            (episode_id,),
+        )
 
     httpd = ThreadingHTTPServer(("127.0.0.1", 0), server.DashboardHandler)
     thread = threading.Thread(target=httpd.serve_forever, daemon=True)
@@ -97,6 +112,28 @@ def test_api_smoke_on_temporary_databases(tmp_path, monkeypatch):
         )
         assert status == 200, created
         assert created["account"]["account_slug"] == "demo-channel"
+        status, blocked = request(base_url, "/api/workflows/upload/run", {})
+        assert status == 409, blocked
+        assert blocked["missingApprovals"] == ["policy", "quality", "rights"]
+
+        status, pending_review = request(base_url, "/api/shorts/Demo01_part01/review")
+        assert status == 200 and pending_review["publicationReady"] is False
+        status, saved = request(
+            base_url,
+            "/api/shorts/Demo01_part01/review",
+            {
+                "sources": [{"url": "https://example.com/reference", "allowedUses": ["inspiration"]}],
+                "creative": {"script": "Original script"},
+                "approvals": {
+                    "rights": {"status": "approved", "note": "checked"},
+                    "policy": {"status": "approved", "note": "checked"},
+                    "quality": {"status": "approved", "note": "checked"},
+                },
+            },
+        )
+        assert status == 200 and saved["review"]["publicationReady"] is True
+        status, started = request(base_url, "/api/workflows/upload/run", {})
+        assert status == 200 and started["workflow"] == "upload"
         status, slots = request(base_url, "/api/accounts/demo-channel/schedule-slots", {"slots": ["13:00"]})
         assert status == 200 and slots["slots"] == ["13:00"]
 

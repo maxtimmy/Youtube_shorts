@@ -1530,6 +1530,68 @@ a:hover { text-decoration: underline; }
 .toast-error { border-color: rgba(255, 106, 106, .28); }
 .toast-message { line-height: 1.45; font-size: 14px; }
 
+.short-review-row,
+.review-section-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.short-review-row { margin-top: 12px; }
+
+.review-modal-card {
+  width: min(980px, calc(100vw - 32px));
+  max-height: min(900px, calc(100vh - 32px));
+}
+
+.review-modal-body {
+  overflow-y: auto;
+  display: grid;
+  gap: 18px;
+}
+
+.review-section {
+  display: grid;
+  gap: 12px;
+  padding: 16px;
+  border: 1px solid rgba(128, 154, 181, 0.16);
+  border-radius: 18px;
+  background: rgba(255, 255, 255, 0.02);
+}
+
+.review-section h3 { margin: 0; }
+.review-sources-list { display: grid; gap: 12px; }
+
+.review-source-card {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px;
+  padding: 14px;
+  border: 1px solid rgba(128, 154, 181, 0.14);
+  border-radius: 14px;
+}
+
+.review-source-field { display: grid; gap: 6px; }
+.review-source-field-wide { grid-column: 1 / -1; }
+.review-source-card > .mini-button { justify-self: start; }
+
+.review-approvals {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 12px;
+}
+
+.review-approval-card {
+  display: grid;
+  gap: 10px;
+  padding: 14px;
+  border: 1px solid rgba(128, 154, 181, 0.14);
+  border-radius: 14px;
+}
+
+.modal-textarea.compact { min-height: 72px; }
+
 @keyframes fadeSlideIn {
   from {
     opacity: 0;
@@ -1622,6 +1684,10 @@ a:hover { text-decoration: underline; }
     grid-template-columns: 1fr;
   }
   .analytics-compare-row {
+    grid-template-columns: 1fr;
+  }
+  .review-source-card,
+  .review-approvals {
     grid-template-columns: 1fr;
   }
 }
