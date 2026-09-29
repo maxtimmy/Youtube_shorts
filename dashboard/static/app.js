@@ -19,6 +19,8 @@ const state = {
   selectedCalendarDate: null,
   youtubeCredentials: [],
   youtubeAnalytics: null,
+  reviewModalShortName: null,
+  reviewData: null,
 };
 
 async function api(path, options = {}) {
@@ -990,7 +992,22 @@ function renderSerialDetail() {
     const shorts = el("div", "short-list");
     for (const short of episode.shorts.slice(0, 6)) {
       const item = el("div", "short-item");
-      item.innerHTML = `<strong>${short.short_name}</strong><div class="subtle">part ${short.short_part} • ${Number(short.duration || 0).toFixed(1)}s</div><div class="subtle">${(short.text || "").slice(0, 120)}</div>`;
+      item.append(el("strong", "", short.short_name));
+      item.append(el("div", "subtle", `part ${short.short_part} • ${Number(short.duration || 0).toFixed(1)}s`));
+      item.append(el("div", "subtle", (short.text || "").slice(0, 120)));
+      const reviewRow = el("div", "short-review-row");
+      reviewRow.append(
+        el(
+          "span",
+          `badge ${short.publication_ready ? "ok" : "warn"}`,
+          short.publication_ready ? "Допущен к публикации" : "Требуется проверка",
+        ),
+      );
+      const reviewButton = el("button", "mini-button", "Открыть проверку");
+      reviewButton.type = "button";
+      reviewButton.onclick = () => openReviewModal(short.short_name).catch((error) => showToast(error.message, "error"));
+      reviewRow.append(reviewButton);
+      item.append(reviewRow);
       shorts.append(item);
     }
     if (episode.shorts.length > 6) shorts.append(el("div", "subtle", `И ещё ${episode.shorts.length - 6} шортсов...`));
@@ -998,6 +1015,160 @@ function renderSerialDetail() {
     card.append(content);
     root.append(card);
   }
+}
+
+function lines(value) {
+  return String(value || "")
+    .split("\n")
+    .map((item) => item.trim())
+    .filter(Boolean);
+}
+
+function addReviewSourceRow(source = {}) {
+  const root = document.getElementById("reviewSourcesList");
+  const row = el("div", "review-source-card");
+  const fields = [
+    ["url", "URL источника", "url"],
+    ["author", "Автор", "text"],
+    ["platform", "Платформа", "text"],
+    ["license", "Лицензия или разрешение", "text"],
+    ["checkedAt", "Дата проверки", "date"],
+    ["allowedUses", "Разрешённое использование — через запятую", "text"],
+    ["useType", "Роль источника", "text"],
+  ];
+  for (const [name, label, type] of fields) {
+    const wrap = el("label", "review-source-field");
+    wrap.append(el("span", "field-label", label));
+    const input = document.createElement("input");
+    input.type = type;
+    input.dataset.reviewField = name;
+    const value = name === "allowedUses" ? (source.allowedUses || []).join(", ") : source[name];
+    input.value = value || (name === "useType" ? "reference" : "");
+    wrap.append(input);
+    row.append(wrap);
+  }
+  const notesWrap = el("label", "review-source-field review-source-field-wide");
+  notesWrap.append(el("span", "field-label", "Заметки"));
+  const notes = document.createElement("textarea");
+  notes.className = "modal-textarea compact";
+  notes.dataset.reviewField = "notes";
+  notes.value = source.notes || "";
+  notesWrap.append(notes);
+  row.append(notesWrap);
+  const remove = el("button", "mini-button", "Удалить источник");
+  remove.type = "button";
+  remove.onclick = () => row.remove();
+  row.append(remove);
+  root.append(row);
+}
+
+function renderReviewApprovals(approvals = {}) {
+  const root = document.getElementById("reviewApprovals");
+  root.innerHTML = "";
+  const labels = { rights: "Права", policy: "Правила платформ", quality: "Качество" };
+  for (const dimension of ["rights", "policy", "quality"]) {
+    const decision = approvals[dimension] || { status: "pending", note: "" };
+    const card = el("div", "review-approval-card");
+    card.dataset.approvalDimension = dimension;
+    card.append(el("strong", "", labels[dimension]));
+    const select = document.createElement("select");
+    select.dataset.approvalField = "status";
+    for (const [value, label] of [["pending", "Ожидает"], ["approved", "Одобрено"], ["rejected", "Отклонено"]]) {
+      const option = document.createElement("option");
+      option.value = value;
+      option.textContent = label;
+      option.selected = decision.status === value;
+      select.append(option);
+    }
+    card.append(select);
+    const note = document.createElement("textarea");
+    note.className = "modal-textarea compact";
+    note.dataset.approvalField = "note";
+    note.placeholder = "Комментарий проверяющего";
+    note.value = decision.note || "";
+    card.append(note);
+    root.append(card);
+  }
+}
+
+function renderReviewAudit(audit = []) {
+  const root = document.getElementById("reviewAuditList");
+  root.innerHTML = "";
+  if (!audit.length) {
+    root.append(el("div", "detail-empty", "Изменений пока нет."));
+    return;
+  }
+  for (const entry of audit) {
+    const card = el("div", "stack-card compact");
+    card.append(el("strong", "", entry.action));
+    card.append(el("div", "subtle", formatDateTime(entry.createdAt)));
+    const approvals = entry.details?.approvals || {};
+    if (Object.keys(approvals).length) card.append(el("div", "subtle", JSON.stringify(approvals)));
+    root.append(card);
+  }
+}
+
+async function openReviewModal(shortName) {
+  const review = await api(`/api/shorts/${encodeURIComponent(shortName)}/review`);
+  state.reviewModalShortName = shortName;
+  state.reviewData = review;
+  document.getElementById("reviewModalTitle").textContent = `Проверка: ${shortName}`;
+  const sourcesRoot = document.getElementById("reviewSourcesList");
+  sourcesRoot.innerHTML = "";
+  for (const source of review.sources || []) addReviewSourceRow(source);
+  document.getElementById("reviewScriptInput").value = review.creative?.script || "";
+  document.getElementById("reviewPromptsInput").value = (review.creative?.prompts || []).join("\n");
+  document.getElementById("reviewAssetsInput").value = (review.creative?.assets || []).map((item) => typeof item === "string" ? item : JSON.stringify(item)).join("\n");
+  document.getElementById("reviewTransformationsInput").value = (review.creative?.transformations || []).join("\n");
+  renderReviewApprovals(review.approvals);
+  renderReviewAudit(review.audit);
+  const modal = document.getElementById("reviewModal");
+  modal.classList.remove("hidden");
+  modal.setAttribute("aria-hidden", "false");
+}
+
+function closeReviewModal() {
+  state.reviewModalShortName = null;
+  state.reviewData = null;
+  const modal = document.getElementById("reviewModal");
+  modal.classList.add("hidden");
+  modal.setAttribute("aria-hidden", "true");
+}
+
+async function saveReviewModal() {
+  if (!state.reviewModalShortName) return;
+  const sources = [...document.querySelectorAll(".review-source-card")].map((row) => {
+    const result = {};
+    row.querySelectorAll("[data-review-field]").forEach((input) => {
+      result[input.dataset.reviewField] = input.value.trim();
+    });
+    result.allowedUses = String(result.allowedUses || "").split(",").map((item) => item.trim()).filter(Boolean);
+    return result;
+  });
+  const approvals = {};
+  document.querySelectorAll("[data-approval-dimension]").forEach((card) => {
+    approvals[card.dataset.approvalDimension] = {
+      status: card.querySelector("[data-approval-field='status']").value,
+      note: card.querySelector("[data-approval-field='note']").value.trim(),
+    };
+  });
+  const result = await api(`/api/shorts/${encodeURIComponent(state.reviewModalShortName)}/review`, {
+    method: "POST",
+    body: JSON.stringify({
+      sources,
+      creative: {
+        script: document.getElementById("reviewScriptInput").value,
+        prompts: lines(document.getElementById("reviewPromptsInput").value),
+        assets: lines(document.getElementById("reviewAssetsInput").value),
+        transformations: lines(document.getElementById("reviewTransformationsInput").value),
+      },
+      approvals,
+    }),
+  });
+  closeReviewModal();
+  if (state.selectedSerial) await loadSerial(state.selectedSerial);
+  await loadAll();
+  showToast(result.review.publicationReady ? "Шортс допущен к публикации." : "Проверка сохранена.", "success");
 }
 
 function renderAccountDetail() {
@@ -1356,9 +1527,13 @@ async function loadAll() {
     api("/api/youtube-analytics"),
   ]);
   if (dashboardResult.status !== "fulfilled") throw dashboardResult.reason;
-  if (workflowsResult.status !== "fulfilled") throw workflowsResult.reason;
   state.dashboard = dashboardResult.value;
-  state.workflows = workflowsResult.value;
+  if (workflowsResult.status === "fulfilled") {
+    state.workflows = workflowsResult.value;
+  } else {
+    state.workflows = { workflows: [], errors: [] };
+    showToast(`n8n временно недоступен: ${workflowsResult.reason.message}`, "warning");
+  }
   if (analyticsResult.status === "fulfilled") {
     state.youtubeAnalytics = analyticsResult.value;
     renderAnalytics();
@@ -1403,6 +1578,10 @@ document.getElementById("closeAccountModalButton").addEventListener("click", clo
 document.getElementById("uploadEpisodeButton").addEventListener("click", () => submitEpisodeUploadModal().catch((error) => showToast(error.message, "error")));
 document.getElementById("cancelEpisodeUploadButton").addEventListener("click", closeEpisodeUploadModal);
 document.getElementById("closeEpisodeUploadModalButton").addEventListener("click", closeEpisodeUploadModal);
+document.getElementById("addReviewSourceButton").addEventListener("click", () => addReviewSourceRow());
+document.getElementById("saveReviewButton").addEventListener("click", () => saveReviewModal().catch((error) => showToast(error.message, "error")));
+document.getElementById("cancelReviewButton").addEventListener("click", closeReviewModal);
+document.getElementById("closeReviewModalButton").addEventListener("click", closeReviewModal);
 document.querySelectorAll("[data-close-account-modal='true']").forEach((node) => {
   node.addEventListener("click", closeAccountModal);
 });
@@ -1414,6 +1593,9 @@ document.querySelectorAll("[data-close-upload-modal='true']").forEach((node) => 
 });
 document.querySelectorAll("[data-close-modal='true']").forEach((node) => {
   node.addEventListener("click", closeCooldownModal);
+});
+document.querySelectorAll("[data-close-review-modal='true']").forEach((node) => {
+  node.addEventListener("click", closeReviewModal);
 });
 document.getElementById("browseEpisodeFileButton").addEventListener("click", () => {
   document.getElementById("episodeFileInput").click();

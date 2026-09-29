@@ -273,6 +273,54 @@
       </div>
     </div>
 
+    <div id="reviewModal" class="modal-shell hidden" aria-hidden="true">
+      <div class="modal-backdrop" data-close-review-modal="true"></div>
+      <div class="modal-card review-modal-card">
+        <div class="modal-head">
+          <div>
+            <p class="panel-kicker">Provenance &amp; Approval</p>
+            <h2 id="reviewModalTitle">Проверка шортса</h2>
+          </div>
+          <button id="closeReviewModalButton" class="icon-button" type="button">✕</button>
+        </div>
+        <div class="modal-body review-modal-body">
+          <section class="review-section">
+            <div class="review-section-head">
+              <div>
+                <h3>Источники</h3>
+                <div class="modal-hint">Фиксируй только разрешённые референсы и условия их использования.</div>
+              </div>
+              <button id="addReviewSourceButton" class="secondary-button" type="button">Добавить источник</button>
+            </div>
+            <div id="reviewSourcesList" class="review-sources-list"></div>
+          </section>
+          <section class="review-section">
+            <h3>Оригинальное производство</h3>
+            <label class="field-label" for="reviewScriptInput">Сценарий</label>
+            <textarea id="reviewScriptInput" class="modal-textarea" placeholder="Авторский сценарий ролика"></textarea>
+            <label class="field-label" for="reviewPromptsInput">Промпты — по одному на строку</label>
+            <textarea id="reviewPromptsInput" class="modal-textarea compact"></textarea>
+            <label class="field-label" for="reviewAssetsInput">Ассеты — по одному на строку</label>
+            <textarea id="reviewAssetsInput" class="modal-textarea compact"></textarea>
+            <label class="field-label" for="reviewTransformationsInput">Преобразования — по одному на строку</label>
+            <textarea id="reviewTransformationsInput" class="modal-textarea compact"></textarea>
+          </section>
+          <section class="review-section">
+            <h3>Ручной допуск</h3>
+            <div id="reviewApprovals" class="review-approvals"></div>
+          </section>
+          <section class="review-section">
+            <h3>Последние изменения</h3>
+            <div id="reviewAuditList" class="stack-list"></div>
+          </section>
+        </div>
+        <div class="modal-actions">
+          <button id="saveReviewButton" class="primary-button" type="button">Сохранить проверку</button>
+          <button id="cancelReviewButton" class="secondary-button" type="button">Отмена</button>
+        </div>
+      </div>
+    </div>
+
     <div id="toastStack" class="toast-stack" aria-live="polite" aria-atomic="true"></div>
 
     <script src="/app.js"></script>

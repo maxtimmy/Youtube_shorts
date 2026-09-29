@@ -16,6 +16,7 @@ from urllib.parse import unquote, urlparse
 from config import settings
 from database import connect, database_status, migrate_all
 from n8n_client import N8NError, client as n8n_client, post_webhook
+from provenance import ReviewValidationError, get_review, missing_approvals, update_review
 
 ROOT = settings.app_root
 STATIC_DIR = ROOT / "static"
@@ -294,10 +295,18 @@ def serial_detail(serial_slug: str) -> dict:
                 sh.final_path,
                 sh.clip_path,
                 sh.score,
-                sh.text
+                sh.text,
+                CASE WHEN ready.id IS NOT NULL THEN 1 ELSE 0 END AS publication_ready,
+                COALESCE((
+                    SELECT GROUP_CONCAT(approval.dimension)
+                    FROM short_approvals approval
+                    WHERE approval.short_id = sh.id
+                      AND approval.status <> 'approved'
+                ), 'rights,policy,quality') AS missing_approvals
             FROM shorts sh
             JOIN episodes e ON e.id = sh.episode_id
             JOIN serials s ON s.id = e.serial_id
+            LEFT JOIN publication_ready_shorts ready ON ready.id = sh.id
             WHERE s.serial_slug = ?
               AND e.episode_base_name = ?
             ORDER BY sh.short_part
@@ -419,7 +428,7 @@ def account_rows() -> list[dict]:
             ) AS active_serial_short_total,
             (
                 SELECT COUNT(*)
-                FROM media.shorts_catalog sc
+                FROM media.publication_ready_shorts sc
                 WHERE sc.serial_slug = s.serial_slug
                   AND NOT EXISTS (
                       SELECT 1
@@ -1225,7 +1234,7 @@ def upload_readiness_summary() -> dict:
           )
           AND EXISTS (
               SELECT 1
-              FROM media.shorts_catalog sc
+              FROM media.publication_ready_shorts sc
               WHERE sc.serial_slug = s.serial_slug
                 AND sc.final_path IS NOT NULL
                 AND NOT EXISTS (
@@ -1568,6 +1577,11 @@ def trigger_workflow(run_key: str) -> None:
     url = urls.get(run_key)
     if not url:
         raise KeyError(run_key)
+    if run_key == "upload":
+        candidates = upload_candidate_short_names()
+        blockers = missing_approvals(MEDIA_DB, candidates) if candidates else []
+        if blockers:
+            raise ReviewValidationError(json.dumps(blockers, ensure_ascii=False))
     post_webhook(url)
     state = read_control_state()
     stopped = state.get("stoppedAt") or {}
@@ -1579,6 +1593,39 @@ def trigger_workflow(run_key: str) -> None:
 
 def stop_workflow(run_key: str) -> None:
     raise N8NError("Stopping executions is not supported by the configured public n8n API", status=501)
+
+
+def upload_candidate_short_names() -> list[str]:
+    conn = db_conn(PUBLISH_DB)
+    conn.row_factory = sqlite3.Row
+    cur = conn.cursor()
+    cur.execute("ATTACH DATABASE ? AS media", (str(MEDIA_DB),))
+    rows = cur.execute(
+        """
+        SELECT DISTINCT sc.short_name
+        FROM youtube_accounts account
+        JOIN account_active_serials active ON active.account_id = account.id
+        JOIN media.shorts_catalog sc ON sc.serial_slug = active.serial_slug
+        WHERE account.is_active = 1
+          AND account.account_slug <> 'default'
+          AND sc.final_path IS NOT NULL
+          AND TRIM(sc.final_path) <> ''
+          AND NOT EXISTS (
+              SELECT 1 FROM youtube_account_cooldowns cooldown
+              WHERE cooldown.account_id = account.id
+                AND cooldown.is_active = 1
+                AND datetime(cooldown.blocked_until) > datetime('now')
+          )
+          AND NOT EXISTS (
+              SELECT 1 FROM youtube_publication_history history
+              WHERE history.account_id = account.id
+                AND history.short_name = sc.short_name
+          )
+        ORDER BY sc.short_name
+        """
+    ).fetchall()
+    conn.close()
+    return [row["short_name"] for row in rows]
 
 
 class DashboardHandler(BaseHTTPRequestHandler):
@@ -1620,6 +1667,13 @@ class DashboardHandler(BaseHTTPRequestHandler):
             return self._send_json(dashboard_payload())
         if parsed.path == "/api/serials":
             return self._send_json(media_summary())
+        short_review_match = re.fullmatch(r"/api/shorts/([^/]+)/review", parsed.path)
+        if short_review_match:
+            short_name = unquote(short_review_match.group(1))
+            try:
+                return self._send_json(get_review(MEDIA_DB, short_name))
+            except KeyError:
+                return self._send_json({"error": "Short not found"}, 404)
         if parsed.path.startswith("/api/serials/"):
             serial_slug = unquote(parsed.path.split("/api/serials/", 1)[1])
             try:
@@ -1654,6 +1708,17 @@ class DashboardHandler(BaseHTTPRequestHandler):
 
     def do_POST(self) -> None:
         parsed = urlparse(self.path)
+        short_review_match = re.fullmatch(r"/api/shorts/([^/]+)/review", parsed.path)
+        if short_review_match:
+            short_name = unquote(short_review_match.group(1))
+            try:
+                review = update_review(MEDIA_DB, short_name, self._read_json())
+            except KeyError:
+                return self._send_json({"error": "Short not found"}, 404)
+            except ReviewValidationError as exc:
+                return self._send_json({"error": str(exc)}, 400)
+            return self._send_json({"ok": True, "review": review})
+
         if parsed.path == "/api/serials/create":
             payload = self._read_json()
             raw_name = str(payload.get("name") or "").strip()
@@ -1910,6 +1975,20 @@ class DashboardHandler(BaseHTTPRequestHandler):
         if parsed.path == "/api/workflows/upload/run":
             try:
                 trigger_workflow("upload")
+            except ReviewValidationError as exc:
+                try:
+                    blockers = json.loads(str(exc))
+                except json.JSONDecodeError:
+                    blockers = []
+                missing = sorted({item for row in blockers for item in row.get("missingApprovals", [])})
+                return self._send_json(
+                    {
+                        "error": "Upload blocked: manual approvals are required",
+                        "missingApprovals": missing,
+                        "blockedShorts": blockers,
+                    },
+                    409,
+                )
             except N8NError as exc:
                 return self._send_json({"error": f"Не удалось запустить Upload: {exc}"}, exc.status or 503)
             except Exception as exc:

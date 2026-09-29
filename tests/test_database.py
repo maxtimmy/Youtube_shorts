@@ -33,10 +33,11 @@ def test_migrations_create_schema_and_are_idempotent(tmp_path, monkeypatch):
     first = database.migrate_all(backup_before=False)
     second = database.migrate_all(backup_before=False)
 
-    assert [item["version"] for item in first] == [1, 1]
+    assert [item["version"] for item in first] == [2, 1]
     assert all(item["applied"] == [] for item in second)
     with sqlite3.connect(media) as conn:
         assert conn.execute("SELECT name FROM sqlite_master WHERE name = 'shorts_catalog'").fetchone()
+        assert conn.execute("SELECT name FROM sqlite_master WHERE name = 'publication_ready_shorts'").fetchone()
     with sqlite3.connect(publishing) as conn:
         privacy = conn.execute("PRAGMA table_info(youtube_accounts)").fetchall()
         assert "default_privacy_status" in {row[1] for row in privacy}
